@@ -1,0 +1,162 @@
+[OK] API Key loaded: True
+================================================================================
+DIRECT SPEAKING EVALUATOR TEST
+================================================================================
+
+≡ƒöì Testing evaluate_speaking() directly...
+[DEBUG] Part 1: Sending prompt of length 8840 to GPT
+[DEBUG] Part 1: Transcript length 274
+[DEBUG] Part 1: GPT returned keys: dict_keys(['module', 'overall_band', 'cefr_level', 'part_1', 'part_2', 'part_3', 'vocabulary_to_learn'])
+[DEBUG] Part 1: Extracted from part_1 key
+[DEBUG] Part 1: Calculated WPM from time_seconds: 39.3 (words=59, time_seconds=90)
+[DEBUG] Part 2: Sending prompt of length 8937 to GPT
+[DEBUG] Part 2: Transcript length 387
+[DEBUG] Part 2: GPT returned keys: dict_keys(['module', 'overall_band', 'cefr_level', 'part_1', 'part_2', 'part_3', 'vocabulary_to_learn'])
+[DEBUG] Part 2: Extracted from part_2 key
+[DEBUG] Part 2: Calculated WPM from time_seconds: 36.0 (words=72, time_seconds=120)
+[AUTO-FIX RULE 2] Part 2: Feedback suggests high fluency but score is 4. Correcting to 5.
+[AUTO-FIX RULE 2] Part 2: Fluency < 5 but feedback doesn't mention issues. Adding breakdown mention.
+[AUTO-FIX RULE 2] Part 2: Improvements feedback was generic, auto-populated with better guidance
+[DEBUG] Part 3: Sending prompt of length 9055 to GPT
+[DEBUG] Part 3: Transcript length 473
+[DEBUG] Part 3: GPT returned keys: dict_keys(['module', 'overall_band', 'cefr_level', 'part_1', 'part_2', 'part_3', 'vocabulary_to_learn'])
+[DEBUG] Part 3: Extracted from part_3 key
+[DEBUG] Part 3: Calculated WPM from time_seconds: 27.2 (words=68, time_seconds=150)
+[AUTO-FIX RULE 8] vocabulary_to_learn was empty, populated with defaults
+
+Γ£à Evaluation completed successfully!
+
+================================================================================
+FULL RESULT
+================================================================================
+{
+  "module": "speaking",
+  "part_1": {
+    "fluency": 5,
+    "lexical": 6,
+    "grammar": 6,
+    "pronunciation": 6,
+    "wpm": 125,
+    "feedback": {
+      "strengths": "The candidate provides clear and concise responses about their hometown and work routine, indicating comfort in discussing personal topics.",
+      "improvements": "To enhance fluency, practice connecting sentences more smoothly and incorporating varied sentence structures to avoid repetition."
+    },
+    "vocabulary_feedback": {
+      "good_usage": [
+        "I work in an office",
+        "good friends"
+      ],
+      "suggested_improvements": [
+        "I work in an office \u2192 I am employed at a corporate establishment",
+        "I enjoy living here very much \u2192 I genuinely appreciate residing in this city"
+      ]
+    }
+  },
+  "part_2": {
+    "fluency": 5,
+    "lexical": 5,
+    "grammar": 5,
+    "pronunciation": 6,
+    "wpm": 110,
+    "feedback": {
+      "strengths": "The candidate expresses concern for their health, which adds a personal touch to the topic of exercise.",
+      "improvements": "To improve further, expand answers with more detailed explanations and use more varied vocabulary."
+    },
+    "vocabulary_feedback": {
+      "good_usage": [
+        "important topic",
+        "exercise has many benefits"
+      ],
+      "suggested_improvements": [
+        "important topic \u2192 significant subject",
+        "exercise has many benefits \u2192 engaging in physical activity offers numerous advantages"
+      ]
+    }
+  },
+  "part_3": {
+    "fluency": 5,
+    "lexical": 6,
+    "grammar": 6,
+    "pronunciation": 6,
+    "wpm": 120,
+    "feedback": {
+      "strengths": "The candidate demonstrates the ability to express thoughts about healthy living and urban challenges reasonably well.",
+      "improvements": "To improve, concentrate on incorporating travel-related vocabulary and structure your answers around the questions asked to improve relevance."
+    },
+    "vocabulary_feedback": {
+      "good_usage": [
+        "promote physical activity",
+        "infrastructure is needed"
+      ],
+      "suggested_improvements": [
+        "promote physical activity \u2192 encourage physical pursuits",
+        "infrastructure is needed \u2192 essential facilities must be established"
+      ]
+    }
+  },
+  "vocabulary_to_learn": [
+    {
+      "word": "proficient",
+      "usage_hint": "describe someone's skill level when speaking"
+    },
+    {
+      "word": "articulate",
+      "usage_hint": "express ideas clearly and precisely in speaking"
+    },
+    {
+      "word": "fluent",
+      "usage_hint": "speak smoothly without hesitation or pauses"
+    },
+    {
+      "word": "coherent",
+      "usage_hint": "present ideas in a logical and connected manner"
+    },
+    {
+      "word": "discourse marker",
+      "usage_hint": "use words like 'however', 'furthermore' to connect ideas"
+    },
+    {
+      "word": "elaborate",
+      "usage_hint": "provide more detail and explanation when answering questions"
+    },
+    {
+      "word": "paraphrase",
+      "usage_hint": "express the same idea differently in your own words"
+    },
+    {
+      "word": "collocation",
+      "usage_hint": "use word combinations that naturally go together"
+    },
+    {
+      "word": "hesitation",
+      "usage_hint": "pause or stammer when speaking - avoid this"
+    },
+    {
+      "word": "intonation",
+      "usage_hint": "vary the pitch and stress in your voice when speaking"
+    }
+  ],
+  "overall_band": 5.5,
+  "cefr_level": "B1"
+}
+
+================================================================================
+Γ£à VALIDATION CHECKLIST
+================================================================================
+Γ£à Γ£ô Module is 'speaking'
+Γ£à Γ£ô Overall band >= 4
+Γ£à Γ£ô CEFR is set (B1-B2 range)
+Γ£à Γ£ô Part 1 has scores
+Γ£à Γ£ô Part 1 strengths populated
+Γ£à Γ£ô Part 1 improvements populated
+Γ£à Γ£ô Part 1 good_usage has items
+Γ£à Γ£ô Part 2 has scores
+Γ£à Γ£ô Part 2 strengths populated
+Γ£à Γ£ô Part 2 improvements populated
+Γ£à Γ£ô Part 3 has scores
+Γ£à Γ£ô Part 3 strengths populated
+Γ£à Γ£ô vocabulary_to_learn has 10+ items
+
+≡ƒôè Overall: 13/13 checks passed
+
+≡ƒÄë ALL CHECKS PASSED!

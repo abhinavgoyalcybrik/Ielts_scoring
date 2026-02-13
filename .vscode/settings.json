@@ -1,0 +1,15 @@
+{
+  "python.analysis.exclude": [
+    ".venv",
+    ".venv/**",
+    "**/node_modules",
+    "**/__pycache__"
+  ],
+  "python.analysis.ignore": [
+    ".venv"
+  ],
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.python",
+    "editor.formatOnSave": true
+  }
+}

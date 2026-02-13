@@ -1,0 +1,208 @@
+server run : ,  http://127.0.0.1:8000/docs
+python -m uvicorn main_api:app --reload
+#speaking code 
+from evaluator import evaluate_attempt
+
+speaking_data = {
+    "test_type": "speaking",
+    "metadata": {
+        "transcript": (
+            "Well, I come from a small town, and I really like my hometown because it is quite peaceful and not too crowded. "
+            "The people there are generally friendly, and neighbours usually know each other, which makes life more comfortable. "
+            "However, I feel that there are limited job opportunities, so many young people move to big cities for work. "
+            "One place in my hometown that I like the most is a public park near my house. I often go there in the evening to walk or just sit and relax. "
+            "It is a good place to spend time with friends, especially after a busy day. I think such places are important because they help people reduce stress. "
+            "In my opinion, living in a city has both advantages and disadvantages. Cities offer better education and job opportunities, "
+            "but at the same time, life is more stressful and expensive. Personally, I prefer a quieter place, but for my career, I think living in a city is necessary."
+        )
+    }
+}
+
+result = evaluate_attempt(speaking_data)
+print(result)
+
+
+#writing code 
+import json
+from evaluator import evaluate_attempt
+from utils.band import round_band
+from utils.gpt_client import call_gpt_refine_answer
+
+
+# =========================
+# TASK 1 INPUT
+# =========================
+task1_text = (
+    "The charts show why adults decide to study and how the cost of adult education should be shared. "
+    "According to the bar chart, the most common reason for studying is interest in the subject at 40%. "
+    "Gaining qualifications is also an important reason at 38%. "
+    "Some people study because it helps their current job, while fewer people study to meet new people. "
+    "The pie chart shows that individuals pay the highest percentage of the cost at 40%. "
+    "Employers pay 35%, and taxpayers pay the smallest part at 25%."
+)
+
+task1_data = {
+    "test_type": "writing",
+    "metadata": {
+        "task_type": "task1",
+        "question": (
+            "The charts below show the results of a survey of adult education. "
+            "The first chart shows the reasons why adults decide to study. "
+            "The pie chart shows how people think the costs of adult education should be shared."
+        )
+    },
+    "user_answers": {
+        "text": task1_text
+    }
+}
+
+
+# =========================
+# TASK 2 INPUT
+# =========================
+task2_text = (
+    "There are many types of music in the world today. People need music for entertainment "
+    "and relaxation. Music can make people feel happy or calm.\n\n"
+    "Some people think traditional music is important because it shows the culture of a country "
+    "and helps people remember history. However, international music is popular because it is "
+    "modern and easy to listen to.\n\n"
+    "In my opinion, both traditional and international music are important. Traditional music "
+    "keeps culture alive, while international music connects people around the world."
+)
+
+task2_data = {
+    "test_type": "writing",
+    "metadata": {
+        "task_type": "task2",
+        "question": (
+            "There are many different types of music in the world today. "
+            "Why do we need music? "
+            "Is traditional music more important than international music?"
+        )
+    },
+    "user_answers": {
+        "text": task2_text
+    }
+}
+
+
+# =========================
+# INTERNAL EVALUATION
+# =========================
+task1_result = evaluate_attempt(task1_data)
+task2_result = evaluate_attempt(task2_data)
+
+task1_band = task1_result.get("overall_band", 5.0)
+task2_band = task2_result.get("overall_band", 5.0)
+
+
+# =========================
+# OVERALL WRITING BAND
+# IELTS: Task 1 = 1/3, Task 2 = 2/3
+# =========================
+overall_writing_band = round_band(
+    (task1_band * 1 / 3) +
+    (task2_band * 2 / 3)
+)
+
+
+# =========================
+# EXAMINER RESPONSE
+# =========================
+examiner_response = (
+    f"This is a Band {overall_writing_band:.1f} writing performance. "
+    "Task 1 presents the main features with reasonable accuracy, while Task 2 "
+    "shows a clear position and relevant ideas. Overall organisation is logical, "
+    "and vocabulary is appropriate, though grammatical accuracy could be improved "
+    "in some areas to achieve a higher band."
+)
+
+
+# =========================
+# IELTS BAND CRITERIA (WRITING)
+# =========================
+band_criteria = {
+    "task1": {
+        "task_achievement": (
+            "How well the candidate presents and compares key features, "
+            "provides an overview, and reports data accurately."
+        ),
+        "coherence_and_cohesion": (
+            "Organisation of information, clarity of progression, "
+            "and appropriate use of linking devices."
+        ),
+        "lexical_resource": (
+            "Range and accuracy of vocabulary used to describe trends, "
+            "figures, and comparisons."
+        ),
+        "grammatical_range_and_accuracy": (
+            "Variety of sentence structures and control of grammar."
+        )
+    },
+    "task2": {
+        "task_response": (
+            "How fully the candidate addresses all parts of the question, "
+            "presents a clear position, and supports ideas with explanations or examples."
+        ),
+        "coherence_and_cohesion": (
+            "Logical paragraphing, progression of ideas, "
+            "and effective use of cohesive devices."
+        ),
+        "lexical_resource": (
+            "Range, precision, and flexibility of vocabulary appropriate to the topic."
+        ),
+        "grammatical_range_and_accuracy": (
+            "Use of simple and complex sentence forms with increasing accuracy."
+        )
+    },
+    "band_weighting": {
+        "task1": "33%",
+        "task2": "67%",
+        "overall_rule": "Overall writing band is calculated by weighting Task 2 twice as much as Task 1."
+    }
+}
+
+
+# =========================
+# REFINE ANSWERS (CALL GPT ONCE PER TASK)
+# =========================
+refined_task1 = call_gpt_refine_answer(task1_text, "task1")
+refined_task2 = call_gpt_refine_answer(task2_text, "task2")
+
+
+# =========================
+# FINAL OUTPUT (DEFENSIVE COPIES)
+# =========================
+final_output = {
+    "writing_result": {
+        "task1_band": task1_band,
+        "task2_band": task2_band,
+        "overall_writing_band": overall_writing_band
+    },
+
+    "band_criteria": band_criteria,
+
+    "examiner_response": examiner_response,
+
+    "user_answer": {
+        "task1": task1_text,
+        "task2": task2_text
+    },
+
+    # Defensive list copies to prevent mutation
+    "user_mistakes": {
+        "task1": list(task1_result.get("mistakes", [])),
+        "task2": list(task2_result.get("mistakes", []))
+    },
+
+    "refined_answer": {
+        "task1": refined_task1,
+        "task2": refined_task2
+    }
+}
+
+
+# =========================
+# PRINT JSON OUTPUT
+# =========================
+print(json.dumps(final_output, indent=2, ensure_ascii=False))
