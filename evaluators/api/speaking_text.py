@@ -1,6 +1,10 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, HTTPException
 from evaluator import evaluate_attempt
-import json
+from evaluators.speaking import evaluate_speaking_part
+from storage.speaking_store import SPEAKING_ATTEMPTS
+from utils.audio_transcriber import transcribe_audio
+from utils.audio_features import extract_audio_features
+from uuid import uuid4
 
 router = APIRouter(
     prefix="/speaking",
@@ -8,8 +12,7 @@ router = APIRouter(
 )
 
 @router.post("/evaluate")
-
-def evaluate_speaking_text(data: dict):
+async def evaluate_speaking_text(request: Request):
     """
     TEXT-based Speaking Evaluation - PART-WISE ASSESSMENT
     Accepts multiple input formats and returns all 3 parts evaluated together.
@@ -23,8 +26,66 @@ def evaluate_speaking_text(data: dict):
     Returns: Complete module assessment with part_1, part_2, part_3, overall_band, cefr_level, vocabulary_to_learn
     """
     
+    content_type = request.headers.get("content-type", "")
+
+    # Handle legacy multipart uploads sent to /speaking/evaluate
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None:
+            raise HTTPException(status_code=400, detail="No audio file provided")
+
+        try:
+            part = int(form.get("part", 1))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid part number")
+
+        attempt_id = form.get("attempt_id")
+        if part not in [1, 2, 3]:
+            raise HTTPException(status_code=400, detail="Invalid part number")
+
+        if part == 1:
+            attempt_id = attempt_id or uuid4().hex
+        else:
+            if not attempt_id:
+                raise HTTPException(status_code=400, detail="attempt_id is required for Part 2 and Part 3")
+            if attempt_id not in SPEAKING_ATTEMPTS:
+                raise HTTPException(status_code=400, detail="Invalid attempt_id")
+
+        transcript = transcribe_audio(upload)
+        audio_metrics = extract_audio_features(upload)
+
+        # Speech rate (WPM)
+        words = len(transcript.split())
+        duration = audio_metrics.get("duration_sec", 1)
+        speech_rate = round((words / duration) * 60) if duration > 0 else 0
+        audio_metrics["speech_rate_wpm"] = speech_rate
+
+        result = evaluate_speaking_part(
+            part=part,
+            transcript=transcript,
+            audio_metrics=audio_metrics
+        )
+
+        SPEAKING_ATTEMPTS[attempt_id]["parts"][part] = result
+
+        return {
+            "attempt_id": attempt_id,
+            "part": part,
+            "result": result
+        }
+
+    # JSON payload handling
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
     # Debug: Log incoming data structure
-    print(f"[DEBUG] Speaking API received data keys: {list(data.keys())}")
+    if isinstance(data, dict):
+        print(f"[DEBUG] Speaking API received data keys: {list(data.keys())}")
+    else:
+        raise HTTPException(status_code=400, detail="Input should be a valid dictionary")
     
     def normalize_part_data(part_data):
         """Convert 'answers'/'answer' to 'transcript' and ensure audio_metrics exists"""
