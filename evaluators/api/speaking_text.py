@@ -43,29 +43,27 @@ async def evaluate_speaking_text(request: Request):
         attempt_id = form.get("attempt_id")
         if part not in [1, 2, 3]:
             raise HTTPException(status_code=400, detail="Invalid part number")
+        attempt_id = (attempt_id or "").strip() or uuid4().hex
 
-        if part == 1:
-            attempt_id = attempt_id or uuid4().hex
-        else:
-            if not attempt_id:
-                raise HTTPException(status_code=400, detail="attempt_id is required for Part 2 and Part 3")
-            if attempt_id not in SPEAKING_ATTEMPTS:
-                raise HTTPException(status_code=400, detail="Invalid attempt_id")
+        try:
+            transcript = transcribe_audio(upload)
+            audio_metrics = extract_audio_features(upload)
 
-        transcript = transcribe_audio(upload)
-        audio_metrics = extract_audio_features(upload)
+            # Speech rate (WPM)
+            words = len(transcript.split())
+            duration = audio_metrics.get("duration_sec", 1)
+            speech_rate = round((words / duration) * 60) if duration > 0 else 0
+            audio_metrics["speech_rate_wpm"] = speech_rate
 
-        # Speech rate (WPM)
-        words = len(transcript.split())
-        duration = audio_metrics.get("duration_sec", 1)
-        speech_rate = round((words / duration) * 60) if duration > 0 else 0
-        audio_metrics["speech_rate_wpm"] = speech_rate
-
-        result = evaluate_speaking_part(
-            part=part,
-            transcript=transcript,
-            audio_metrics=audio_metrics
-        )
+            result = evaluate_speaking_part(
+                part=part,
+                transcript=transcript,
+                audio_metrics=audio_metrics
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Audio evaluation failed for part {part}: {e}")
 
         SPEAKING_ATTEMPTS[attempt_id]["parts"][part] = result
 
