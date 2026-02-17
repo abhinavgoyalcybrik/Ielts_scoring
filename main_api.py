@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from evaluators.api.writing import router as writing_router
 from evaluators.api.reading import router as reading_router
 from evaluators.api.listening import router as listening_router
-from evaluators.api.speaking_text import router as speaking_router
+from evaluators.api.speaking_text import router as speaking_text_router
 from evaluators.api.speaking import router as speaking_audio_router
 
 app = FastAPI(
@@ -32,7 +32,7 @@ app = FastAPI(
 app.include_router(writing_router)
 app.include_router(reading_router)
 app.include_router(listening_router)
-app.include_router(speaking_router)
+app.include_router(speaking_text_router)
 app.include_router(speaking_audio_router)
 
 # --------------------
@@ -57,13 +57,9 @@ def root():
 
 if __name__ == "__main__":
     import uvicorn
-    import socket
     
-    # Dynamically find an available port
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(('127.0.0.1', 0))
-    port = sock.getsockname()[1]
-    sock.close()
+    # Use fixed port 8001 for Django backend to connect
+    port = 8001
     
-    print(f"Starting server on 127.0.0.1:{port}")
+    print(f"Starting IELTS AI Evaluator on 127.0.0.1:{port}")
     uvicorn.run(app, host="127.0.0.1", port=port)
