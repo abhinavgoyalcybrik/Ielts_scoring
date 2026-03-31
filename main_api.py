@@ -58,8 +58,8 @@ def root():
 if __name__ == "__main__":
     import uvicorn
     
-    # Use fixed port 8001 for Django backend to connect
-    port = 8001
+    # Default evaluator port for server deployments; override with PORT/EVALUATOR_PORT.
+    port = int(os.getenv("PORT", os.getenv("EVALUATOR_PORT", "8001")))
     
     print(f"Starting IELTS AI Evaluator on 127.0.0.1:{port}")
     uvicorn.run(app, host="127.0.0.1", port=port)
