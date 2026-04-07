@@ -1,8 +1,9 @@
 from pathlib import Path
 from utils.band import round_band
-from utils.ai_client import call_gpt_writing, call_gpt_refine_answer
+from utils.ai_client import call_gpt_writing, call_gpt_text
 from utils.cefr_mapper import map_ielts_to_cefr
-from utils.vocabulary_feedback import get_writing_vocabulary_reference, analyze_vocabulary
+from utils.vocabulary_feedback import analyze_vocabulary, generate_topic_vocabulary
+from utils.safety import safe_gpt_call, safe_output, normalize_feedback
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -20,49 +21,94 @@ def count_words(text: str) -> int:
     return len(text.split())
 
 
-def get_vocabulary_to_learn(essay: str, task_type: str, band: float) -> list:
+def get_vocabulary_to_learn(essay: str, task_type: str, band: float, question: str = "") -> list:
     """
-    Extract vocabulary for the user to learn based on their essay and band level.
-    Returns 12-20 words/phrases that are relevant and slightly above current level.
+    Extract TASK-SPECIFIC vocabulary for the user to learn.
+    
+    STRICT RULES:
+    - Task 1: ONLY chart/data terminology (NO argumentation or topic-specific words)
+    - Task 2: ONLY argumentation + topic-specific vocabulary (NO chart/data terminology)
+    - ZERO overlap between Task 1 and Task 2 vocabulary lists
+    - Returns 12-20 words/phrases specific to the task and topic
+    
+    Args:
+        essay: The user's writing
+        task_type: "task_1" (chart/diagram) or "task_2" (opinion/discussion)
+        band: The user's IELTS band score
+    
+    Returns:
+        List of task-specific vocabulary to learn (12-20 items)
     """
-    # Get topic-relevant vocabulary for the task
-    vocab_reference = get_writing_vocabulary_reference(task_type)
+    # Normalize task_type
+    if task_type in ("task_1", "task1"):
+        task_type_normalized = "task_1"
+    elif task_type == "general_task_1":
+        task_type_normalized = "general_task_1"
+    else:
+        task_type_normalized = "task_2"
+    
+    # Dynamically build vocabulary from question/topic
+    vocab_reference = generate_topic_vocabulary(question or "", essay, task_type_normalized)
     
     # Analyze what the user already used
     vocab_analysis = analyze_vocabulary(essay)
-    good_usage = set(vocab_analysis.get("good_usage", []))
+    good_usage = set(word.lower() for word in vocab_analysis.get("good_usage", []))
     
     # Filter vocabulary: prefer words not yet used by student
     vocab_to_learn = []
     for vocab_item in vocab_reference:
         word = vocab_item.get("word", "").lower()
         hint = vocab_item.get("usage_hint", "")
+        item_task_type = vocab_item.get("task_type", task_type_normalized)
         
-        # Skip if student already used this word
-        if word not in good_usage and word.lower() not in " ".join(good_usage).lower():
-            vocab_to_learn.append({
-                "word": vocab_item["word"],
-                "usage_hint": hint
-            })
+        # STRICT RULE: Only include vocabulary marked for this task type
+        if item_task_type != task_type_normalized:
+            continue
+        
+        # Skip if student already used this word/phrase
+        if word in good_usage or any(w in " ".join(good_usage) for w in word.split()):
+            continue
+        
+        # All suggested vocabulary should be B2+ (IELTS Band 6+)
+        vocab_to_learn.append({
+            "word": vocab_item["word"],
+            "usage_hint": hint,
+            "task_specific": True,
+            "task_type": task_type_normalized  # Explicitly mark task type
+        })
     
-    # If we have too few, add suggested improvements
+    # If insufficient vocabulary from reference, add more from the same task type
     if len(vocab_to_learn) < 12:
-        suggested = vocab_analysis.get("suggested_improvements", [])
-        for suggestion in suggested:
+        # Get ALL vocabulary of this task type and fill gaps
+        all_task_vocab = generate_topic_vocabulary(question or "", essay, task_type_normalized)
+        for item in all_task_vocab:
             if len(vocab_to_learn) >= 20:
                 break
-            # Extract words from suggestion
-            import re
-            words = re.findall(r"'([^']+)'", suggestion)
-            for word in words:
-                if len(vocab_to_learn) < 20:
-                    vocab_to_learn.append({
-                        "word": word,
-                        "usage_hint": f"Advanced alternative"
-                    })
+            word_lower = item["word"].lower()
+            # Only add if not already in the list
+            if not any(v["word"].lower() == word_lower for v in vocab_to_learn):
+                vocab_to_learn.append({
+                    "word": item["word"],
+                    "usage_hint": item.get("usage_hint", ""),
+                    "task_specific": True,
+                    "task_type": task_type_normalized
+                })
     
-    # Return 12-20 words
-    return vocab_to_learn[0:20]  # Max 20
+    # Cap at 20, ensure all items are unique (remove duplicates while preserving order)
+    seen = set()
+    final_vocab = []
+    for item in vocab_to_learn:
+        word_lower = item["word"].lower()
+        # STRICT: Verify task type matches before including
+        if item.get("task_type") != task_type_normalized:
+            continue
+        if word_lower not in seen:
+            seen.add(word_lower)
+            final_vocab.append(item)
+        if len(final_vocab) >= 20:
+            break
+    
+    return final_vocab[0:15]  # Return max 15 items
 
 
 
@@ -83,7 +129,8 @@ def apply_coherence_penalty_cap(mistakes: list) -> list:
     """
     coherence_repetition_errors = [
         m for m in mistakes 
-        if m.get("error_type") == "coherence" and "repetition" in m.get("explanation", "").lower()
+        if (m.get("error_type") == "coherence" or m.get("type") == "coherence")
+        and "repetition" in m.get("explanation", "").lower()
     ]
     
     if len(coherence_repetition_errors) > 2:
@@ -92,8 +139,8 @@ def apply_coherence_penalty_cap(mistakes: list) -> list:
         filtered_mistakes = []
         for m in mistakes:
             is_repetition = (
-                m.get("error_type") == "coherence" and 
-                "repetition" in m.get("explanation", "").lower()
+                (m.get("error_type") == "coherence" or m.get("type") == "coherence")
+                and "repetition" in m.get("explanation", "").lower()
             )
             if is_repetition:
                 if repetition_count < 2:
@@ -149,12 +196,22 @@ def evaluate_writing(data: dict):
         .replace("<<<TASK_TYPE>>>", task_type)
     )
 
-    ai = call_gpt_writing(prompt)
+    default_ai = {
+        "task_response": 5,
+        "coherence_cohesion": 5,
+        "lexical_resource": 5,
+        "grammar_accuracy": 5,
+        "mistakes": [],
+        "strengths": [],
+        "examiner_response": ""
+    }
+
+    ai = safe_gpt_call(prompt, fallback=default_ai, caller=call_gpt_writing) or default_ai
 
     tr = clamp(ai.get("task_response", 5))
     cc = clamp(ai.get("coherence_cohesion", 5))
     lr = clamp(ai.get("lexical_resource", 5))
-    gr = clamp(ai.get("grammar_accuracy", 5))
+    gr = clamp(ai.get("grammar_accuracy", ai.get("grammar", 5)))
 
     if task_type == "task_1":
         overall = tr * 0.3 + cc * 0.25 + lr * 0.25 + gr * 0.2
@@ -165,18 +222,65 @@ def evaluate_writing(data: dict):
     overall = apply_fair_band_scoring(overall, tr, task_type)
     band = round_band(overall)
 
-    refined = call_gpt_refine_answer(question, essay, 8)
+    # =========================
+    # STRICT IELTS WORD COUNT BAND CAP
+    # =========================
+    if task_type == "task_1":
+        if word_count < 50:
+            band = min(band, 4.5)
+        elif word_count < 100:
+            band = min(band, 5.5)
+
+    if task_type == "task_2":
+        if word_count < 80:
+            band = min(band, 4.5)
+        elif word_count < 150:
+            band = min(band, 5.5)
+
+    # Controlled refinement with fallback and length guard
+    refine_prompt = (
+        f"Rewrite this IELTS Task {'1' if task_type == 'task_1' else '2'} answer to Band 7 level. "
+        f"Keep it clear, not too long:\n{essay}"
+    )
+    refined = safe_gpt_call(
+        refine_prompt,
+        fallback=essay,
+        caller=lambda p: call_gpt_text(p, system_msg="You are an IELTS Writing tutor.")
+    )
+    refined = safe_output(refined, essay)
+    if isinstance(refined, str) and len(refined.split()) > 180:
+        refined = " ".join(refined.split()[:180])
     
     # Apply coherence penalty cap: max 2 repetition-related errors
-    mistakes = apply_coherence_penalty_cap(ai.get("mistakes", []))
+    raw_mistakes = ai.get("mistakes", [])
+    if isinstance(raw_mistakes, list):
+        filtered_mistakes = []
+        for m in raw_mistakes:
+            exp = (m.get("explanation", "") or "")
+            if "no error" in exp.lower():
+                continue
+            filtered_mistakes.append(m)
+        raw_mistakes = filtered_mistakes
+    mistakes = apply_coherence_penalty_cap(raw_mistakes if isinstance(raw_mistakes, list) else [])
     
     # Map to CEFR level
     cefr = map_ielts_to_cefr(band)
     
     # Get vocabulary to learn
-    vocab_list = get_vocabulary_to_learn(essay, task_type, band)
+    vocab_list = generate_topic_vocabulary(question, essay, task_type)
+    topic_words = [w for w in vocab_list if w.get("task_specific", True)]
+    connectors = [w for w in vocab_list if not w.get("task_specific", True)]
+    connectors = connectors[:2]
+    vocab_list = (topic_words + connectors)[:10]
 
-    return {
+    feedback_text = ai.get("examiner_response", "") or ""
+    feedback = normalize_feedback(feedback_text) or "Clear and concise answer; focus on stronger linking."
+    improvement_text = ""
+    if isinstance(ai.get("feedback"), dict):
+        improvement_text = ai.get("feedback", {}).get("improvements", "")
+    improvement = normalize_feedback(improvement_text) or "Improve coherence with clearer transitions."
+
+    result = {
         "overall_band": band,
         "cefr_level": cefr,
         "criteria_scores": {
@@ -187,6 +291,13 @@ def evaluate_writing(data: dict):
         },
         "mistakes": mistakes,
         "refined_answer": refined,
-        "word_count": word_count,
-        "vocabulary_to_learn": vocab_list
+        "word_count": word_count
     }
+
+    # Consistent top-level shape for downstream UI
+    result["band_score"] = result.get("overall_band", band)
+    result["feedback"] = safe_output(feedback, "Provide clearer structure and examples.")
+    result["improvement"] = safe_output(improvement, "Use varied vocabulary and clearer linking words.")
+    result["vocabulary"] = vocab_list
+
+    return result

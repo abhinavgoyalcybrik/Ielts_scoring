@@ -4,9 +4,15 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 
-# Load environment variables and read the OpenAI key from OPENAI_API_KEY.
+# Ensure .env is loaded and get the correct API key
 load_dotenv()
-API_KEY = os.getenv("OPENAI_API_KEY")
+API_KEY = (os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_KEY") or "").strip()
+if not API_KEY:
+    # fallback: try to find any env var that looks like an OpenAI key
+    for k, v in os.environ.items():
+        if k.upper().startswith("OPENAI") and isinstance(v, str) and v.startswith("sk-"):
+            API_KEY = v.strip()
+            break
 if not API_KEY:
     raise RuntimeError("OPENAI_API_KEY not set")
 client = OpenAI(api_key=API_KEY)
@@ -56,3 +62,10 @@ def call_gpt_refine_answer(question: str, answer: str, target_band: int = 8) -> 
         prompt,
         system_msg="You are an IELTS Writing tutor."
     )
+
+
+def call_gpt_text(prompt: str, system_msg: str = "You are an IELTS assistant.") -> str:
+    """
+    Lightweight text-only GPT helper (no JSON parsing).
+    """
+    return _call_gpt(prompt, system_msg=system_msg)

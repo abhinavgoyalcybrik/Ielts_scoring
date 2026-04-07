@@ -1,4 +1,4 @@
-from utils.band import band_from_correct
+from utils.band import band_from_correct, general_reading_band
 
 
 def evaluate_reading(data: dict):
@@ -7,12 +7,13 @@ def evaluate_reading(data: dict):
     # =========================
     questions = data.get("questions", [])
     user_answers = data.get("user_answers", {})
+    test_type = data.get("test_type", "academic")  # 👈 NEW (default safe)
 
     if not questions or not user_answers:
         raise ValueError("Invalid reading input format")
 
     correct = 0
-    wrong_question_types = set()  # 👈 store types of wrong answers
+    wrong_question_types = set()
 
     # =========================
     # EVALUATION LOGIC
@@ -33,12 +34,15 @@ def evaluate_reading(data: dict):
             wrong_question_types.add(qtype)
 
     # =========================
-    # BAND CALCULATION
+    # BAND CALCULATION (SAFE SWITCH)
     # =========================
-    band = band_from_correct(correct)
+    if test_type == "general":
+        band = general_reading_band(correct)
+    else:
+        band = band_from_correct(correct)  # 👈 your original academic logic
 
     # =========================
-    # IMPROVEMENTS BASED ON QUESTION TYPE
+    # IMPROVEMENTS
     # =========================
     improvements = []
 
@@ -61,7 +65,7 @@ def evaluate_reading(data: dict):
             )
 
     # =========================
-    # IELTS-STYLE EXAMINER FEEDBACK
+    # FEEDBACK
     # =========================
     examiner_feedback = (
         f"This is a Band {band} reading performance. "
@@ -72,10 +76,11 @@ def evaluate_reading(data: dict):
     )
 
     # =========================
-    # FINAL RESPONSE (NO MISTAKES ARRAY)
+    # FINAL RESPONSE
     # =========================
     return {
         "module": "reading",
+        "test_type": test_type,  # 👈 NEW (optional but useful)
         "overall_band": band,
         "accuracy": f"{correct}/{len(questions)}",
         "improvements": improvements,

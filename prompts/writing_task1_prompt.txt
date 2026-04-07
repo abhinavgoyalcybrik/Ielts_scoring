@@ -42,20 +42,22 @@ TASK RESPONSE SCORING (when word count is low):
 - Score accordingly (typically 4-5 range for significantly short answers)
 - But still evaluate all four criteria
 
-RESPONSE FORMAT:
-- Respond with VALID JSON ONLY
-- Do NOT include explanations, markdown, headings, or extra text
-- Do NOT wrap in code blocks
-- If no mistakes, return empty array []
-- The "sentence" field MUST match the Candidate Answer EXACTLY (no paraphrasing)
+RESPONSE FORMAT (STRICT JSON, NO MARKDOWN):
+- Return ONLY valid JSON (no prose, no code fences).
+- Keys required: task_response, coherence_cohesion, lexical_resource, grammar, overall_band, mistakes.
+- Mistakes: extract 5–10 real issues if present; cover task_response, coherence, lexical, and grammar; if almost perfect, give at least 2 minor improvements.
+- Each mistake object must have: "type" (task_response|coherence|lexical|grammar), "original" (exact text), "corrected", "explanation".
+- Use exact candidate wording in "original"; keep spacing/punctuation.
 
-Return ONLY this JSON structure:
+Return ONLY this structure:
 {
   "task_response": 0-9,
   "coherence_cohesion": 0-9,
   "lexical_resource": 0-9,
-  "grammar_accuracy": 0-9,
-  "mistakes": [{"sentence": "", "error_type": "", "explanation": "", "correction": ""}],
-  "strengths": [],
-  "examiner_response": ""
+  "grammar": 0-9,
+  "overall_band": 0-9,
+  "mistakes": [
+    {"type": "lexical", "original": "", "corrected": "", "explanation": ""},
+    {"type": "grammar", "original": "", "corrected": "", "explanation": ""}
+  ]
 }

@@ -167,56 +167,242 @@ def analyze_vocabulary(text: str) -> Dict[str, List[str]]:
     return {"good_usage": good_usage, "suggested_improvements": final_suggestions}
 
 
-def get_writing_vocabulary_reference(task_type: str = None) -> List[Dict[str, str]]:
+def detect_essay_topic(text: str) -> str:
     """
-    Return topic-relevant vocabulary list for IELTS Writing tasks.
-    Each item includes word/phrase and a usage hint for learning.
-    
-    Args:
-        task_type: "task_1" (chart/diagram) or "task_2" (opinion/discussion) or None (general)
-    
-    Returns:
-        List of dicts with keys: "word", "usage_hint"
+    Detect the essay topic from text keywords.
+    Returns: topic string (e.g., 'education', 'technology', 'environment', 'work', 'travel')
     """
+    text_lower = text.lower()
     
-    # General academic vocabulary (applies to both tasks)
-    general_vocab = [
-        {"word": "proportion", "usage_hint": "use with figures and percentages"},
-        {"word": "substantial", "usage_hint": "describe large changes or amounts"},
-        {"word": "significant", "usage_hint": "emphasize importance of trends"},
-        {"word": "decline", "usage_hint": "describe downward movement in data"},
-        {"word": "surge", "usage_hint": "describe rapid increase"},
-        {"word": "fluctuate", "usage_hint": "show up-and-down changes"},
+    topic_keywords = {
+        "technology": ["technology", "internet", "online", "digital", "software", "artificial", "ai", "robot", "innovation"],
+        "education": ["education", "school", "university", "study", "learning", "student", "academic", "degree"],
+        "work": ["work", "job", "career", "employment", "employer", "workplace", "professional"],
+        "environment": ["environment", "climate", "pollution", "sustainable", "green", "energy", "carbon", "emissions"],
+        "health": ["health", "exercise", "fitness", "disease", "diet", "sport", "wellness", "medical"],
+        "travel": ["travel", "tourism", "destination", "tourism industry", "culture", "tourist", "trip"],
+        "transport": ["transport", "transportation", "traffic", "public transport", "vehicle", "driving", "roads"],
+        "social": ["social", "family", "relationship", "community", "society", "people", "culture"],
+    }
+    
+    for topic, keywords in topic_keywords.items():
+        if any(keyword in text_lower for keyword in keywords):
+            return topic
+    
+    return "general"
+
+
+def generate_topic_vocabulary(question: str, essay: str, task_type: str) -> List[Dict[str, str]]:
+    """
+    Generate task-aware vocabulary dynamically from question/topic.
+    Returns 10-15 items with usage hints and task_type tagging.
+    """
+    question_lower = (question or "").lower()
+    essay_lower = (essay or "").lower()
+    combined_text = f"{question_lower} {essay_lower}".strip()
+    topic = detect_essay_topic(combined_text)
+
+    def build(items: List[Dict[str, str]], task_label: str, limit: int = 15) -> List[Dict[str, str]]:
+        seen = set()
+        vocab = []
+        for item in items:
+            word = item.get("word", "").strip()
+            if not word or word.lower() in seen:
+                continue
+            task_specific = item.get("task_specific", True)
+            seen.add(word.lower())
+            vocab.append({
+                "word": word,
+                "usage_hint": item.get("usage_hint", ""),
+                "task_type": task_label,
+                "task_specific": task_specific
+            })
+            if len(vocab) >= limit:
+                break
+        return vocab
+
+    # General Training Task 1 (letter)
+    is_letter = (
+        task_type == "general_task_1"
+        or "letter" in question_lower
+        or question_lower.startswith("write a letter")
+        or "dear" in essay_lower
+    )
+    if is_letter:
+        letter_vocab = [
+            {"word": "invite", "usage_hint": "ask someone to come"},
+            {"word": "visit", "usage_hint": "go to see someone"},
+            {"word": "stay", "usage_hint": "live temporarily"},
+            {"word": "arrange", "usage_hint": "make plans or organise"},
+            {"word": "convenient", "usage_hint": "easy and suitable time/place"},
+            {"word": "nearby", "usage_hint": "close in distance"},
+            {"word": "comfortable", "usage_hint": "pleasant and relaxing"},
+            {"word": "appreciate", "usage_hint": "express gratitude politely"},
+            {"word": "accommodate", "usage_hint": "provide lodging or space"},
+            {"word": "suggest", "usage_hint": "propose an idea"},
+            {"word": "clarify", "usage_hint": "make something clear"},
+            {"word": "arrangements", "usage_hint": "plans you have made"},
+        ]
+        return build(letter_vocab, "general_task_1", limit=12)
+
+    # Academic Task 1 (charts/data/process with strict 50/50 balance)
+    if task_type in ("task_1", "task1"):
+        base_words = [
+            "illustrates",
+            "proportion",
+            "trend",
+            "increase",
+            "decline"
+        ][:5]
+
+        if "transport" in question_lower or "travel" in question_lower:
+            topic_words_raw = ["commute", "traffic", "vehicle", "passengers", "public transport"]
+        elif "population" in question_lower:
+            topic_words_raw = ["residents", "demographics", "growth rate", "urban", "rural"]
+        elif "education" in question_lower or "students" in question_lower:
+            topic_words_raw = ["students", "enrollment", "graduates", "institutions", "literacy"]
+        elif "sales" in question_lower or "company" in question_lower:
+            topic_words_raw = ["revenue", "profit", "consumers", "market share", "growth"]
+        else:
+            topic_words_raw = ["category", "data", "figures", "comparison", "segment"]
+
+        topic_words_raw = topic_words_raw[:5]
+        final_words = base_words + topic_words_raw  # exactly 10 (5 base + 5 topic)
+
+        vocab_structured = [
+            {"word": w, "usage_hint": "context-based usage", "task_type": "task_1", "task_specific": True}
+            for w in final_words
+        ]
+        return build(vocab_structured, "task_1", limit=10)
+
+    # Task 2 (argument + topic-specific)
+    topic_vocab = {
+        "technology": [
+            {"word": "innovation", "usage_hint": "new ideas or methods"},
+            {"word": "automation", "usage_hint": "machines handling tasks"},
+            {"word": "digitalization", "usage_hint": "converting to digital form"},
+            {"word": "efficiency", "usage_hint": "doing tasks with less waste"},
+            {"word": "dependency", "usage_hint": "reliance on technology"},
+        ],
+        "education": [
+            {"word": "curriculum", "usage_hint": "course of study"},
+            {"word": "pedagogy", "usage_hint": "teaching methodology"},
+            {"word": "literacy", "usage_hint": "ability to read and write"},
+            {"word": "assessment", "usage_hint": "evaluation of learning"},
+            {"word": "scholarship", "usage_hint": "financial aid for study"},
+        ],
+        "environment": [
+            {"word": "sustainability", "usage_hint": "meeting needs without depletion"},
+            {"word": "emissions", "usage_hint": "release of gases"},
+            {"word": "renewable", "usage_hint": "naturally replenished resources"},
+            {"word": "conservation", "usage_hint": "protecting natural resources"},
+            {"word": "biodiversity", "usage_hint": "variety of life forms"},
+        ],
+        "health": [
+            {"word": "prevention", "usage_hint": "avoiding illness"},
+            {"word": "nutrition", "usage_hint": "quality of diet"},
+            {"word": "sedentary", "usage_hint": "inactive lifestyle"},
+            {"word": "wellbeing", "usage_hint": "state of health and happiness"},
+            {"word": "vaccination", "usage_hint": "immunisation against disease"},
+        ],
+        "transport": [
+            {"word": "congestion", "usage_hint": "traffic crowding"},
+            {"word": "infrastructure", "usage_hint": "roads, rail, facilities"},
+            {"word": "commute", "usage_hint": "daily travel to work"},
+            {"word": "public transit", "usage_hint": "buses, trains, metros"},
+            {"word": "sustainability", "usage_hint": "environmentally friendly travel"},
+        ],
+        "work": [
+            {"word": "productivity", "usage_hint": "output per time"},
+            {"word": "flexibility", "usage_hint": "adaptable working patterns"},
+            {"word": "collaboration", "usage_hint": "working together"},
+            {"word": "burnout", "usage_hint": "exhaustion from stress"},
+            {"word": "remote work", "usage_hint": "working away from office"},
+        ],
+        "social": [
+            {"word": "inequality", "usage_hint": "unequal distribution"},
+            {"word": "cohesion", "usage_hint": "unity in a community"},
+            {"word": "diversity", "usage_hint": "variety of backgrounds"},
+            {"word": "engagement", "usage_hint": "active participation"},
+            {"word": "marginalized", "usage_hint": "pushed to the edge of society"},
+        ],
+        "general": [
+            {"word": "policy", "usage_hint": "plan of action"},
+            {"word": "impact", "usage_hint": "effect or influence"},
+            {"word": "evidence", "usage_hint": "supporting facts"},
+            {"word": "stakeholders", "usage_hint": "people affected by an issue"},
+            {"word": "trade-off", "usage_hint": "balancing competing factors"},
+        ],
+    }
+
+    argument_vocab = [
+        {"word": "furthermore", "usage_hint": "add another argument", "task_specific": False},
+        {"word": "however", "usage_hint": "introduce contrast", "task_specific": False},
+        {"word": "consequently", "usage_hint": "show result", "task_specific": False},
+        {"word": "moreover", "usage_hint": "add emphasis", "task_specific": False},
+        {"word": "mitigate", "usage_hint": "make a problem less severe", "task_specific": False},
+        {"word": "beneficial", "usage_hint": "helpful or advantageous", "task_specific": False},
+        {"word": "notably", "usage_hint": "highlight a key point", "task_specific": False},
+        {"word": "for instance", "usage_hint": "introduce an example", "task_specific": False},
+        {"word": "on the other hand", "usage_hint": "present an opposing view", "task_specific": False},
+        {"word": "conclude", "usage_hint": "finish an argument", "task_specific": False},
     ]
-    
-    # Task 1 specific (charts, data, comparisons)
-    task1_vocab = general_vocab + [
-        {"word": "depicts", "usage_hint": "describe what a chart shows"},
-        {"word": "workforce", "usage_hint": "employed population"},
-        {"word": "sector", "usage_hint": "industry area (agriculture, services)"},
-        {"word": "structural shift", "usage_hint": "long-term economic change"},
-        {"word": "prominence", "usage_hint": "importance or dominance"},
-        {"word": "marked", "usage_hint": "clearly noticeable (marked change)"},
-        {"word": "predominantly", "usage_hint": "mainly, mostly"},
-        {"word": "in contrast", "usage_hint": "show difference between items"},
-    ]
-    
-    # Task 2 specific (opinion, arguments, discussion)
-    task2_vocab = general_vocab + [
-        {"word": "contend", "usage_hint": "argue or claim (contend that...)"},
-        {"word": "alleviate", "usage_hint": "reduce or ease a problem"},
-        {"word": "sustainable", "usage_hint": "environmentally and socially viable"},
-        {"word": "infrastructure", "usage_hint": "basic systems (roads, transport, facilities)"},
-        {"word": "mitigate", "usage_hint": "make less severe (mitigate climate change)"},
-        {"word": "encompasses", "usage_hint": "includes or contains"},
-        {"word": "furthermore", "usage_hint": "add another strong point"},
-        {"word": "inherent", "usage_hint": "natural, built-in quality"},
-    ]
-    
-    # Return based on task type
-    if task_type and "task_1" in str(task_type).lower():
-        return task1_vocab
-    elif task_type and "task_2" in str(task_type).lower():
-        return task2_vocab
-    else:
-        return general_vocab
+
+    topic_terms = topic_vocab.get(topic, topic_vocab["general"])
+
+    limit = 15
+    topic_target = max(1, round(limit * 0.7))
+    connector_target = max(1, limit - topic_target)
+
+    chosen = []
+    seen = set()
+
+    # First, add topic-specific terms up to target
+    for item in topic_terms:
+        word = item.get("word", "").lower()
+        if not word or word in seen:
+            continue
+        chosen.append(item)
+        seen.add(word)
+        if len(chosen) >= topic_target:
+            break
+
+    # Then, add connectors up to target
+    connectors_added = 0
+    for item in argument_vocab:
+        word = item.get("word", "").lower()
+        if not word or word in seen:
+            continue
+        chosen.append(item)
+        seen.add(word)
+        connectors_added += 1
+        if connectors_added >= connector_target:
+            break
+
+    # Fill remaining slots prioritizing topic terms, then connectors
+    for item in topic_terms:
+        if len(chosen) >= limit:
+            break
+        word = item.get("word", "").lower()
+        if word and word not in seen:
+            chosen.append(item)
+            seen.add(word)
+
+    if len(chosen) < limit:
+        for item in argument_vocab:
+            if len(chosen) >= limit:
+                break
+            word = item.get("word", "").lower()
+            if word and word not in seen:
+                chosen.append(item)
+                seen.add(word)
+
+    return build(chosen, "task_2", limit=limit)
+
+
+def get_writing_vocabulary_reference(task_type: str = None, essay_text: str = "", question: str = "") -> List[Dict[str, str]]:
+    """
+    Return TASK-SPECIFIC vocabulary list for IELTS Writing tasks.
+    Now generated dynamically from the question/topic to avoid fixed lists.
+    """
+    return generate_topic_vocabulary(question or "", essay_text or "", task_type or "task_2")
