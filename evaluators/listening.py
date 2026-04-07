@@ -1,4 +1,4 @@
-from utils.band import band_from_correct
+from utils.band import listening_band_from_correct
 
 
 def evaluate_listening(data):
@@ -40,7 +40,7 @@ def evaluate_listening(data):
     # -----------------------------
     # Examiner feedback
     # -----------------------------
-    band = band_from_correct(correct)
+    band = listening_band_from_correct(correct)
 
     examiner_feedback = (
         f"This is a Band {band} listening performance. "
