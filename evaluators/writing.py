@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 from utils.band import round_band
 from utils.ai_client import call_gpt_writing, call_gpt_text
 from utils.cefr_mapper import map_ielts_to_cefr
@@ -19,6 +20,46 @@ def clamp(score):
 
 def count_words(text: str) -> int:
     return len(text.split())
+
+
+def _strip_wrapping_quotes(text: str) -> str:
+    value = str(text or "").strip()
+    prev = None
+    while value != prev and len(value) >= 2:
+        prev = value
+        value = re.sub(r'^[\"\'\u201c\u201d\u2018\u2019]+|[\"\'\u201c\u201d\u2018\u2019]+$', "", value).strip()
+    return value
+
+
+def _split_sentences(text: str) -> list[str]:
+    if not text:
+        return []
+    return [part.strip() for part in re.split(r'(?<=[.!?])\s+|\n+', str(text)) if part and part.strip()]
+
+
+def _best_matching_sentence(original: str, refined_answer: str) -> str:
+    source = _strip_wrapping_quotes(original)
+    candidates = _split_sentences(refined_answer)
+    if not source or not candidates:
+        return ""
+
+    source_tokens = set(re.findall(r"[a-z0-9']+", source.lower()))
+    if not source_tokens:
+        return candidates[0]
+
+    best = ""
+    best_score = 0.0
+    for candidate in candidates:
+        candidate_tokens = set(re.findall(r"[a-z0-9']+", candidate.lower()))
+        if not candidate_tokens:
+            continue
+        overlap = len(source_tokens & candidate_tokens)
+        union = len(source_tokens | candidate_tokens) or 1
+        score = overlap / union
+        if score > best_score:
+            best_score = score
+            best = candidate
+    return best or candidates[0]
 
 
 def get_vocabulary_to_learn(essay: str, task_type: str, band: float, question: str = "") -> list:
@@ -238,9 +279,17 @@ def evaluate_writing(data: dict):
             band = min(band, 5.5)
 
     # Controlled refinement with fallback and length guard
+    if task_type == "task_1":
+        target_min_words = 150
+        target_max_words = 170
+    else:
+        target_min_words = 250
+        target_max_words = 260
+    
     refine_prompt = (
-        f"Rewrite this IELTS Task {'1' if task_type == 'task_1' else '2'} answer to Band 7 level. "
-        f"Keep it clear, not too long:\n{essay}"
+        f"Rewrite this IELTS Task {'1' if task_type == 'task_1' else '2'} answer to Band 9 level. "
+        f"EXPAND it to exactly {target_max_words} words (between {target_min_words}-{target_max_words} words). "
+        f"Add more examples, detailed explanations, and sophisticated vocabulary:\n{essay}"
     )
     refined = safe_gpt_call(
         refine_prompt,
@@ -248,8 +297,9 @@ def evaluate_writing(data: dict):
         caller=lambda p: call_gpt_text(p, system_msg="You are an IELTS Writing tutor.")
     )
     refined = safe_output(refined, essay)
-    if isinstance(refined, str) and len(refined.split()) > 180:
-        refined = " ".join(refined.split()[:180])
+    max_refined_words = 170 if task_type == "task_1" else 260
+    if isinstance(refined, str) and len(refined.split()) > max_refined_words:
+        refined = " ".join(refined.split()[:max_refined_words])
     
     # Apply coherence penalty cap: max 2 repetition-related errors
     raw_mistakes = ai.get("mistakes", [])
@@ -262,6 +312,26 @@ def evaluate_writing(data: dict):
             filtered_mistakes.append(m)
         raw_mistakes = filtered_mistakes
     mistakes = apply_coherence_penalty_cap(raw_mistakes if isinstance(raw_mistakes, list) else [])
+    # Ensure every mistake has a clean, non-empty corrected sentence.
+    for m in mistakes:
+        try:
+            original = _strip_wrapping_quotes(m.get("original") or m.get("sentence") or "")
+            corrected = _strip_wrapping_quotes(m.get("corrected") or m.get("correction") or "")
+
+            if not corrected and original:
+                corrected = _best_matching_sentence(original, refined)
+            if not corrected:
+                corrected = original
+
+            if original:
+                m["original"] = original
+                m["sentence"] = original
+            if corrected:
+                m["corrected"] = corrected
+                m["correction"] = corrected
+        except Exception:
+            # Defensive: do not let one bad mistake object break evaluation
+            continue
     
     # Map to CEFR level
     cefr = map_ielts_to_cefr(band)
