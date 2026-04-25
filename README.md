@@ -1,4 +1,4 @@
-IELTS/PTE AI Evaluator
+IELTS AI Evaluator
 
 This project evaluates IELTS/PTE responses:
 - Speaking
