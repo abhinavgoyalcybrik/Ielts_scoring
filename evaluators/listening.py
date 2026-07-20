@@ -21,7 +21,7 @@ def evaluate_listening(data):
     for qid, ans in key.items():
         user_ans = user.get(qid)
 
-        if user_ans == ans:
+        if user_ans and ans and user_ans == ans:
             correct += 1
         else:
             # Listening IELTS-style generic error classification

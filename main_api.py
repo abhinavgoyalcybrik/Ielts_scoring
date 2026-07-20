@@ -27,6 +27,7 @@ from evaluators.api.writing import router as writing_router
 from evaluators.api.reading import router as reading_router
 from evaluators.api.listening import router as listening_router
 from evaluators import speaking_audio
+from evaluators.api.speaking_text import router as speaking_text_router
 
 app = FastAPI(
     title="IELTS AI Evaluator API",
@@ -40,6 +41,7 @@ app.include_router(writing_router)
 app.include_router(reading_router)
 app.include_router(listening_router)
 app.include_router(speaking_audio.router)
+app.include_router(speaking_text_router)
 
 # Health Check
 @app.get("/health")

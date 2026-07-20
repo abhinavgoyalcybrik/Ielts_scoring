@@ -32,6 +32,7 @@ async def upload_speaking_audio(
 
     # ---- AUDIO PROCESSING ----
     transcript = transcribe_audio(file)
+    file.file.seek(0)  # reset pointer consumed by transcriber
     audio_metrics = extract_audio_features(file)
 
     # Speech rate (WPM)

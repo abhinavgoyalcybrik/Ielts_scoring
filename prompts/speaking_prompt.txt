@@ -187,10 +187,14 @@ REQUIRED OUTPUT FORMAT (STRICT JSON)
   "grammar": 0-9 (number, NEVER 0 unless non-verbal),
   "pronunciation": 0-9 (number),
   "wpm": number (90-150 for normal speech),
-  "feedback": {
-    "strengths": "specific contextual observation (min 25 chars, NEVER empty)",
-    "improvements": "specific actionable guidance (min 25 chars, NEVER empty or boilerplate)"
+  "mistakes": {
+    "fluency": "1-2 sentence specific critique of fluency issues in this response (NEVER empty)",
+    "grammar": "1-2 sentence specific critique of grammar issues found in the transcript (NEVER empty)",
+    "vocabulary": "1-2 sentence specific critique of vocabulary limitations in this response (NEVER empty)",
+    "pronunciation": "1-2 sentence specific guidance on pronunciation improvement (NEVER empty)"
   },
+  "improvement": "One clear, actionable improvement tip for this part specifically (min 30 chars)",
+  "band9_answer": "Write a complete Band 9 model answer to the question(s) in {{questions}} — at least 3 sentences, natural, sophisticated vocabulary, no filler words",
   "vocabulary_feedback": {
     "good_usage": [
       "phrase from transcript showing good usage",
@@ -200,17 +204,21 @@ REQUIRED OUTPUT FORMAT (STRICT JSON)
       "phrase from transcript → better alternative",
       "another suggestion from transcript"
     ]
-  }
+  },
+  "vocabulary_to_learn": [
+    {"word": "sophisticated word relevant to this part's topic", "meaning": "clear, brief definition"}
+  ]
 }
 
 CRITICAL VALIDATION CHECKLIST (BEFORE OUTPUTTING):
 ✓ fluency is 5-7 range (realistic)
 ✓ All scores are NOT zero (unless genuinely non-verbal)
-✓ feedback.strengths is NOT empty and min 25 characters (SPECIFIC to this part)
-✓ feedback.improvements is NOT empty, NOT boilerplate, min 25 characters (UNIQUE to this part)
+✓ mistakes.fluency/grammar/vocabulary/pronunciation are NOT empty (min 20 chars each)
+✓ improvement is NOT empty, NOT generic (SPECIFIC to this part)
+✓ band9_answer is a complete model answer (min 3 sentences, sophisticated vocabulary)
 ✓ vocabulary_feedback.good_usage has 2-4 items with SPACES (are phrases)
 ✓ vocabulary_feedback.suggested_improvements has 2-3 items with " → " notation
-✓ All vocabulary items are from THIS part's transcript (UNIQUE)
+✓ vocabulary_to_learn has 3-6 items, each with word and meaning
 ✓ WPM is 90-150 (reasonable speaking rate)
 ✓ JSON is valid and complete
 ✓ No null values or empty strings in required fields
@@ -399,16 +407,12 @@ HARD AUTO-COMPLETE & FAIL-SAFE
 9) BEFORE OUTPUTTING RESPONSE:
 Perform this checklist internally:
 
-- part_1 exists and is complete
-- part_2 exists and is complete
-- part_3 exists and is complete
-- each part has:
-  fluency, lexical, grammar, pronunciation, wpm,
-  feedback(strengths + improvements),
-  vocabulary_feedback (both arrays)
-- overall_band exists
-- cefr_level exists
-- vocabulary_to_learn has 10–15 items
+- fluency, lexical, grammar, pronunciation, wpm exist
+- mistakes has all 4 keys (fluency, grammar, vocabulary, pronunciation)
+- improvement is non-empty and specific
+- band9_answer is a complete model answer (not a placeholder)
+- vocabulary_feedback (both arrays) exist
+- vocabulary_to_learn has 3-6 items with word + meaning
 - JSON is fully closed
 
 IF ANY ITEM IS MISSING:
@@ -416,70 +420,8 @@ IF ANY ITEM IS MISSING:
 → DO NOT stop output early
 → DO NOT return partial JSON
 
---------------------------------
-OUTPUT FORMAT (STRICT JSON ONLY)
---------------------------------
-
-{
-  "module": "speaking",
-  "overall_band": number,
-  "cefr_level": string,
-
-  "part_1": {
-    "fluency": number,
-    "lexical": number,
-    "grammar": number,
-    "pronunciation": number,
-    "wpm": number,
-    "feedback": {
-      "strengths": string,
-      "improvements": string
-    },
-    "vocabulary_feedback": {
-      "good_usage": [],
-      "suggested_improvements": []
-    }
-  },
-
-  "part_2": {
-    "fluency": number,
-    "lexical": number,
-    "grammar": number,
-    "pronunciation": number,
-    "wpm": number,
-    "feedback": {
-      "strengths": string,
-      "improvements": string
-    },
-    "vocabulary_feedback": {
-      "good_usage": [],
-      "suggested_improvements": []
-    }
-  },
-
-  "part_3": {
-    "fluency": number,
-    "lexical": number,
-    "grammar": number,
-    "pronunciation": number,
-    "wpm": number,
-    "feedback": {
-      "strengths": string,
-      "improvements": string
-    },
-    "vocabulary_feedback": {
-      "good_usage": [],
-      "suggested_improvements": []
-    }
-  },
-
-  "vocabulary_to_learn": [
-    { "word": "", "usage_hint": "" }
-  ]
-}
-
 FINAL INSTRUCTIONS:
-- Output JSON ONLY.
+- Output JSON ONLY. One object. No wrapper.
 - Never stop mid-output.
 - Never return partial data.
 - Apply all auto-fixes silently.

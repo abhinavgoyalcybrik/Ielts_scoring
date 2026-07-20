@@ -18,7 +18,7 @@ BANNED_VOCABULARY = {
     # A1-A2 basic nouns (too elementary for IELTS Speaking)
     "friend", "family", "people", "person", "thing", "stuff", "job", "work",
     "place", "time", "day", "house", "home", "school", "room", "class",
-    "colleague", "colleague", "boss", "task", "subject", "grade", "exam",
+    "colleague", "boss", "task", "subject", "grade", "exam",
     "food", "drink", "music", "book", "movie", "sport", "game",
     # Generic/overused words (lack specificity)
     "good", "bad", "nice", "thing", "stuff", "very", "really", "actually",
@@ -633,7 +633,10 @@ def detect_grammatical_range(transcript: str) -> dict:
     transcript_lower = transcript.lower()
     
     # Patterns
-    relative_clauses = len(re.findall(r'\b(who|which|that|where|when)\b', transcript_lower))
+    # "who/which" always introduce relative clauses; "where/when" only when following a noun phrase;
+    # exclude bare "that" (too common as a conjunction) — only match as a relative pronoun
+    relative_clauses = len(re.findall(r'\b(who|which)\b', transcript_lower))
+    relative_clauses += len(re.findall(r'\b(where|when)\b\s+\w+\s+\w+', transcript_lower))
     embedded_clauses = len(re.findall(r'[,;:]\s+\w+\s+\w+\s+[,;]', transcript))
     conditionals = len(re.findall(r'\b(if|unless|provided that)\b', transcript_lower))
     
@@ -1067,10 +1070,19 @@ IMPORTANT:
         "grammar": 5,
         "pronunciation": 6,
         "wpm": 120,
+        "mistakes": {
+            "fluency": "Work on reducing filler words and maintaining a steady pace.",
+            "grammar": "Review subject-verb agreement and tense consistency.",
+            "vocabulary": "Replace basic words with more precise, topic-specific alternatives.",
+            "pronunciation": "Focus on natural stress patterns and intonation."
+        },
+        "improvement": "Focus on expanding your answers with specific examples and sophisticated vocabulary.",
+        "band9_answer": "",
         "feedback": {
             "strengths": "Basic response detected",
             "improvements": "Improve clarity and structure"
-        }
+        },
+        "vocabulary_to_learn": []
     }
 
     # Base GPT evaluation with safety wrapper
@@ -1094,6 +1106,15 @@ IMPORTANT:
     elif isinstance(result, dict) and "fluency" not in result and "part_1" in result:
         # Full multi-part response, but we expected single part - use the specified part
         result = result.get(f"part_{part}", result.get("part_1", {}))
+
+    # ============================================
+    # EXTRACT NEW FORMAT FIELDS FROM GPT RESPONSE
+    # ============================================
+    # Preserve band9_answer, mistakes, improvement, vocabulary_to_learn if GPT returned them
+    gpt_band9_answer = result.get("band9_answer", "")
+    gpt_mistakes = result.get("mistakes") if isinstance(result.get("mistakes"), dict) else {}
+    gpt_improvement = result.get("improvement", "")
+    gpt_vocab_to_learn = result.get("vocabulary_to_learn") if isinstance(result.get("vocabulary_to_learn"), list) else []
 
     # ============================================
     # EMERGENCY VALIDATION: Check if GPT returned broken data
@@ -1230,16 +1251,10 @@ IMPORTANT:
         if wpm > 0:
             result["wpm"] = wpm
         else:
-            # Estimate WPM from transcript length and fluency markers
-            words = len(transcript.split()) if transcript else 0
-            # Estimate speaking time based on word count and fluency
-            # Assume average speaking rate: 120 words/minute for fluent speech
-            estimated_time_minutes = words / 120.0 if words > 0 else 0
-            result["wpm"] = round(words / estimated_time_minutes, 1) if estimated_time_minutes > 0 else 0
+            result["wpm"] = 0
 
     # Ensure WPM is never 0 unless no transcript
     if result["wpm"] == 0 and transcript and len(transcript.strip()) > 0:
-        # Conservative estimate: 120 WPM for fluent speech
         result["wpm"] = 120
 
     # ============================================
@@ -1689,6 +1704,43 @@ IMPORTANT:
         "latency": result.get("processing_time")
     })
 
+    # ============================================
+    # ATTACH NEW FORMAT FIELDS TO RESULT
+    # ============================================
+    # Attach band9_answer (from GPT or empty string)
+    if gpt_band9_answer and not result.get("band9_answer"):
+        result["band9_answer"] = gpt_band9_answer
+
+    # Attach per-criterion mistakes (from GPT or derive from existing feedback)
+    if not result.get("mistakes") or not isinstance(result.get("mistakes"), dict):
+        fb_improvements = result.get("feedback", {}).get("improvements", "")
+        result["mistakes"] = gpt_mistakes or {
+            "fluency": "Focus on maintaining a steady pace and reducing hesitation.",
+            "grammar": "Review complex sentence structures and tense accuracy.",
+            "vocabulary": "Replace common words with more precise, topic-specific terms.",
+            "pronunciation": "Work on word stress and natural intonation patterns.",
+        }
+
+    # Attach improvement tip
+    if not result.get("improvement"):
+        result["improvement"] = (
+            gpt_improvement
+            or result.get("feedback", {}).get("improvements", "")
+            or "Focus on expanding your answers with specific examples."
+        )
+
+    # Normalise vocabulary_to_learn (rename usage_hint → meaning)
+    if gpt_vocab_to_learn and not result.get("vocabulary_to_learn"):
+        result["vocabulary_to_learn"] = [
+            {"word": v.get("word", ""), "meaning": v.get("meaning", v.get("usage_hint", ""))}
+            for v in gpt_vocab_to_learn if v.get("word")
+        ]
+    elif result.get("vocabulary_to_learn") and isinstance(result["vocabulary_to_learn"], list):
+        result["vocabulary_to_learn"] = [
+            {"word": v.get("word", ""), "meaning": v.get("meaning", v.get("usage_hint", ""))}
+            for v in result["vocabulary_to_learn"] if v.get("word")
+        ]
+
     return result
 
 
@@ -1718,6 +1770,7 @@ def evaluate_speaking(data: dict):
     }
     
     parts_evaluated = []
+    part_raw = {}   # part_num → full evaluate_speaking_part() result
     all_vocab_to_learn = {}
     
     # Evaluate Part 1
@@ -1740,6 +1793,7 @@ def evaluate_speaking(data: dict):
             "band_blockers": p1_result.get("band_blockers", [])
         }
         parts_evaluated.append(p1_result)
+        part_raw[1] = p1_result
         if "vocabulary_to_learn" in p1_result:
             for item in p1_result.get("vocabulary_to_learn", []):
                 all_vocab_to_learn[item.get("word")] = item
@@ -1762,10 +1816,11 @@ def evaluate_speaking(data: dict):
             "band_blockers": p1_result.get("band_blockers", [])
         }
         parts_evaluated.append(p1_result)
+        part_raw[1] = p1_result
         if "vocabulary_to_learn" in p1_result:
             for item in p1_result.get("vocabulary_to_learn", []):
                 all_vocab_to_learn[item.get("word")] = item
-    
+
     # Evaluate Part 2
     if isinstance(part_2_data, dict) and "transcript" in part_2_data:
         p2_result = evaluate_speaking_part(
@@ -1786,6 +1841,7 @@ def evaluate_speaking(data: dict):
             "band_blockers": p2_result.get("band_blockers", [])
         }
         parts_evaluated.append(p2_result)
+        part_raw[2] = p2_result
         if "vocabulary_to_learn" in p2_result:
             for item in p2_result.get("vocabulary_to_learn", []):
                 all_vocab_to_learn[item.get("word")] = item
@@ -1808,10 +1864,11 @@ def evaluate_speaking(data: dict):
             "band_blockers": p2_result.get("band_blockers", [])
         }
         parts_evaluated.append(p2_result)
+        part_raw[2] = p2_result
         if "vocabulary_to_learn" in p2_result:
             for item in p2_result.get("vocabulary_to_learn", []):
                 all_vocab_to_learn[item.get("word")] = item
-    
+
     # Evaluate Part 3
     if isinstance(part_3_data, dict) and "transcript" in part_3_data:
         p3_result = evaluate_speaking_part(
@@ -1832,6 +1889,7 @@ def evaluate_speaking(data: dict):
             "band_blockers": p3_result.get("band_blockers", [])
         }
         parts_evaluated.append(p3_result)
+        part_raw[3] = p3_result
         if "vocabulary_to_learn" in p3_result:
             for item in p3_result.get("vocabulary_to_learn", []):
                 all_vocab_to_learn[item.get("word")] = item
@@ -1854,10 +1912,11 @@ def evaluate_speaking(data: dict):
             "band_blockers": p3_result.get("band_blockers", [])
         }
         parts_evaluated.append(p3_result)
+        part_raw[3] = p3_result
         if "vocabulary_to_learn" in p3_result:
             for item in p3_result.get("vocabulary_to_learn", []):
                 all_vocab_to_learn[item.get("word")] = item
-    
+
     # Calculate overall band from evaluated parts
     if parts_evaluated:
         avg_fluency = sum(p.get("fluency", 0) for p in parts_evaluated) / len(parts_evaluated)
@@ -2197,8 +2256,71 @@ def evaluate_speaking(data: dict):
 
     final_check["band_score"] = final_check.get("overall_band", results.get("overall_band", 5.5))
     final_check["feedback"] = safe_output(combined_feedback, "Provide concise answers with clear examples.")
-    final_check["mistakes"] = []
-    final_check["improvement"] = final_check["feedback"]
     final_check["vocabulary"] = safe_output(vocab_flat, [])
-    
+
+    # ============================================
+    # ENRICH EACH PART WITH NEW FORMAT FIELDS
+    # ============================================
+    _default_mistakes = {
+        "fluency": "Focus on maintaining a steady pace and reducing hesitation.",
+        "grammar": "Review complex structures and ensure tense accuracy.",
+        "vocabulary": "Replace common words with more precise, topic-specific alternatives.",
+        "pronunciation": "Work on word stress patterns and natural intonation.",
+    }
+    vocab_top = results.get("vocabulary_to_learn", {})
+
+    for part_num in [1, 2, 3]:
+        part_key = f"part_{part_num}"
+        part_dict = final_check.get(part_key)
+        if not isinstance(part_dict, dict):
+            continue
+
+        raw = part_raw.get(part_num, {})
+
+        # Nested scores object (mirror of flat fields)
+        part_dict["scores"] = {
+            "fluency": part_dict.get("fluency", 0),
+            "lexical": part_dict.get("lexical", 0),
+            "grammar": part_dict.get("grammar", 0),
+            "pronunciation": part_dict.get("pronunciation", 0),
+        }
+
+        # Per-criterion mistake feedback
+        part_dict["mistakes"] = raw.get("mistakes") if isinstance(raw.get("mistakes"), dict) else _default_mistakes.copy()
+
+        # Improvement tip
+        part_dict["improvement"] = (
+            raw.get("improvement")
+            or part_dict.get("feedback", {}).get("improvements", "")
+            or "Expand your answers with specific examples and varied vocabulary."
+        )
+
+        # Band 9 model answer
+        part_dict["band9_answer"] = raw.get("band9_answer", "")
+
+        # Per-part vocabulary_to_learn (rename usage_hint → meaning)
+        part_vocab_raw = (
+            raw.get("vocabulary_to_learn")
+            or (vocab_top.get(part_key) if isinstance(vocab_top, dict) else None)
+            or []
+        )
+        part_dict["vocabulary_to_learn"] = [
+            {"word": v.get("word", ""), "meaning": v.get("meaning", v.get("usage_hint", ""))}
+            for v in part_vocab_raw if v.get("word")
+        ]
+
+        # Questions with user_answer (from input data if available)
+        raw_input = data.get(part_key) or {}
+        input_answers = raw_input.get("answers") or []
+        input_answer = raw_input.get("answer") or raw_input.get("transcript") or ""
+        if isinstance(input_answers, list) and input_answers:
+            part_dict["questions"] = [
+                {"question": f"Question {i + 1}", "user_answer": str(a)}
+                for i, a in enumerate(input_answers)
+            ]
+        elif input_answer:
+            part_dict["questions"] = [{"question": "Question 1", "user_answer": input_answer}]
+        elif not part_dict.get("questions"):
+            part_dict["questions"] = []
+
     return final_check

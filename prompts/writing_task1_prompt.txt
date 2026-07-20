@@ -44,10 +44,12 @@ TASK RESPONSE SCORING (when word count is low):
 
 RESPONSE FORMAT (STRICT JSON, NO MARKDOWN):
 - Return ONLY valid JSON (no prose, no code fences).
-- Keys required: task_response, coherence_cohesion, lexical_resource, grammar, overall_band, mistakes.
+- Keys required: task_response, coherence_cohesion, lexical_resource, grammar, overall_band, mistakes, strengths, improvement.
 - Mistakes: extract 5–10 real issues if present; cover task_response, coherence, lexical, and grammar; if almost perfect, give at least 2 minor improvements.
 - Each mistake object must have: "type" (task_response|coherence|lexical|grammar), "original" (exact text), "corrected", "explanation".
 - Use exact candidate wording in "original"; keep spacing/punctuation.
+- "strengths": 1–2 sentences citing specific content/language actually used by the candidate (e.g. accurate data description, a well-organized overview, a precise comparison). Do NOT output generic or boilerplate praise — reference the answer itself.
+- "improvement": 1–2 sentences giving the single most impactful, specific thing this candidate should work on next, based on their actual weakest criterion/criteria and the mistakes found. Do NOT output a generic tip like "improve coherence with clearer transitions" unless coherence genuinely is the weakest area for THIS answer — tie it to what you actually observed.
 
 Return ONLY this structure:
 {
@@ -59,5 +61,7 @@ Return ONLY this structure:
   "mistakes": [
     {"type": "lexical", "original": "", "corrected": "", "explanation": ""},
     {"type": "grammar", "original": "", "corrected": "", "explanation": ""}
-  ]
+  ],
+  "strengths": "",
+  "improvement": ""
 }
