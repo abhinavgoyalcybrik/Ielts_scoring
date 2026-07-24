@@ -6,12 +6,12 @@ from openai import OpenAI
 
 # Ensure .env is loaded and get the correct API key
 load_dotenv()
-API_KEY = os.getenv("paste api key")
+API_KEY = os.getenv("OPENAI_API_KEY")
 if not API_KEY:
     # fallback: try to find any env var that looks like an OpenAI key
     for k, v in os.environ.items():
         if isinstance(v, str) and v.startswith("sk-"):
-            API_KEY = v
+            API_KEY = v     
             break
 if not API_KEY:
     raise RuntimeError("OPENAI_API_KEY not set")

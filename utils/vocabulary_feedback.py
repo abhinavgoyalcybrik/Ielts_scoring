@@ -31,7 +31,7 @@ TOPIC_ALTERNATIVES = {
 
 def _tokenize(text: str) -> List[str]:
     return re.findall(r"\w+'?\w*|\w+", text.lower())
-
+ 
 
 def _ngrams(tokens: List[str], n: int) -> List[str]:
     return [" ".join(tokens[i:i+n]) for i in range(len(tokens) - n + 1)]

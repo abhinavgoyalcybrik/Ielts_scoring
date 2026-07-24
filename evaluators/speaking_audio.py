@@ -1,4 +1,8 @@
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+
+from collections import OrderedDict, deque
+
+import threading
 
 from utils.audio_normalizer import normalize_to_wav
 
@@ -10,11 +14,7 @@ from utils.safety import safe_gpt_call, normalize_feedback
 
 from evaluators.speaking import (
 
-    evaluate_speaking_part,
-
     compute_pronunciation_score,
-
-    evaluate_speaking,
 
 )
 
@@ -45,6 +45,8 @@ import uuid
 import asyncio
 
 import logging
+
+logger = logging.getLogger(__name__)
 
 import random
 
@@ -86,99 +88,103 @@ VOCAB_FALLBACK_PART3 = [
 ]
 
 
-def round_to_ielts_band(score):
+# Explicit timeout on every direct OpenAI API call in this module - without
+# one, a hung request to OpenAI would hang the whole request indefinitely
+# (bounded only by whatever default the SDK/httpx happens to use).
+OPENAI_TIMEOUT_SECONDS = 60
 
-    try:
-
-        if score is None:
-
-            return 5.0
-
-        return round(score * 2) / 2
-
-    except Exception:
-
-        return 5.0
-
-
-def normalize_summary_bands(summary):
-
-    if not isinstance(summary, dict):
-
-        return {}
-
-    def round_band(x):
-
-        try:
-
-            return round(float(x) * 2) / 2
-
-        except Exception:
-
-            return 5.0
-
-    return {
-
-        "fluency": round_band(summary.get("fluency")),
-
-        "lexical": round_band(summary.get("lexical")),
-
-        "grammar": round_band(summary.get("grammar")),
-
-        "pronunciation": round_band(summary.get("pronunciation")),
-
-        "feedback": summary.get("feedback", {}),
-
-        "vocabulary_feedback": summary.get("vocabulary_feedback", {}),
-
-    }
-
+# Reject audio clips larger than this to prevent a single oversized/
+# malicious upload from consuming excessive memory or processing time. A
+# real IELTS speaking answer is at most a couple of minutes of compressed
+# audio - 25MB is already generous headroom (matches OpenAI's own Whisper
+# API upload limit as a reference point).
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
 
 # Lightweight in-process rate limiting (best-effort, per-worker)
 
-_REQUEST_COUNT = 0
+_RATE_LIMIT_THRESHOLD = 30
 
-_RATE_LIMIT_THRESHOLD = 500
-
-
-
-
-
-def _check_rate_limit():
-
-    global _REQUEST_COUNT
-
-    _REQUEST_COUNT += 1
-
-    return _REQUEST_COUNT <= _RATE_LIMIT_THRESHOLD
+_RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 
 
 
-# In-memory caches to avoid repeated ASR/feature work within a process
+_rate_limit_lock = threading.Lock()
 
-_ASR_CACHE = {}
+_rate_limit_timestamps = deque()
 
-_FEATURE_CACHE = {}
+
+def _check_rate_limit() -> bool:
+    """Sliding time-window rate limit: at most _RATE_LIMIT_THRESHOLD calls
+    per _RATE_LIMIT_WINDOW_SECONDS, per worker process. Previously this was
+    a lifetime request counter that, once past the threshold, rejected
+    every request forever for the rest of the process's life - not a real
+    rate limit. This is in-memory and per-process only; it does not
+    coordinate across multiple server instances (a shared store like Redis
+    would be needed for that)."""
+    now = time.time()
+    with _rate_limit_lock:
+        while _rate_limit_timestamps and now - _rate_limit_timestamps[0] > _RATE_LIMIT_WINDOW_SECONDS:
+            _rate_limit_timestamps.popleft()
+        if len(_rate_limit_timestamps) >= _RATE_LIMIT_THRESHOLD:
+            return False
+        _rate_limit_timestamps.append(now)
+        return True
+
+
+
+
+
+# In-memory caches to avoid repeated ASR/feature work within a process.
+# Bounded (LRU eviction) and observable - unbounded dicts would accumulate
+# every transcript ever processed for the lifetime of the server, and gave
+# zero visibility into whether a "recycled" transcript came from a genuine
+# re-submission of the same audio bytes (a real cache hit) vs a coincidence
+# of similar wording. Every hit/miss is now logged with the audio hash so
+# that's provable from server logs instead of guessed at.
+
+class _BoundedCache:
+    """Thread-safe: _evaluate_speaking_part_audio() now runs concurrently
+    across a real thread pool (via asyncio.to_thread), not just cooperative
+    asyncio tasks, so concurrent get()/set() from multiple audio clips in
+    the same request is an expected, normal case - not an edge case."""
+
+    def __init__(self, max_size: int = 200):
+        self._store = OrderedDict()
+        self._max_size = max_size
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            if key not in self._store:
+                return None, False
+            self._store.move_to_end(key)
+            return self._store[key], True
+
+    def set(self, key, value):
+        with self._lock:
+            self._store[key] = value
+            self._store.move_to_end(key)
+            while len(self._store) > self._max_size:
+                self._store.popitem(last=False)
+
+
+_ASR_CACHE = _BoundedCache(max_size=200)
+
+_FEATURE_CACHE = _BoundedCache(max_size=200)
 
 _USED_VOCAB = set()
 
 
 
-# Load Whisper once per process (CPU-friendly)
-
-try:
-
-    # Use a faster Whisper variant to reduce latency; switch to "tiny" if extreme speed is needed.
-
-    WHISPER_MODEL = whisper.load_model("small")
-
-except Exception as exc:
-
-    WHISPER_MODEL = None
-
-    print({"event": "whisper_load_failed", "error": str(exc)})
+# The `import whisper` above (module-level) already guarantees the package
+# is importable here - this used to ALSO load its own separate "small"
+# model instance just to double as an availability check, which doubled
+# memory/startup cost for a model that was never actually used for
+# transcription (utils.audio_transcriber._load_model() loads the one model
+# that's actually used, once, and reuses it).
+WHISPER_AVAILABLE = True
 
 
 
@@ -681,15 +687,23 @@ def split_transcript_with_gpt(transcript: str, questions: list):
     """
 
     prompt = f"""
-You are given an IELTS speaking response.
+You are given an IELTS speaking response that covers multiple questions in
+one continuous transcript.
 
 Your task:
-Split the response into separate answers for EACH question.
+Split the transcript into separate answers for EACH question, using ONLY
+the candidate's EXACT original words for each segment.
+
+CRITICAL - DO NOT MODIFY THE CANDIDATE'S WORDS:
+- Copy each answer segment VERBATIM from the transcript - do not paraphrase,
+  summarize, shorten, reword, or "clean up" anything. Every word, filler,
+  and grammar mistake must be preserved exactly as spoken.
+- This is a splitting task only, not a rewriting task. You are drawing
+  boundaries between existing text, not producing new text.
 
 IMPORTANT:
 - Number of answers MUST equal number of questions
 - Each answer should correspond to the most relevant part of the transcript
-- Keep answers concise but meaningful
 - Do NOT merge answers
 - Do NOT skip any question
 
@@ -768,22 +782,98 @@ def extract_keywords(text: str, top_n: int = 5) -> list:
     return [w for w, _ in sorted_words[:top_n]]
 
 
+def _count_band9_answers(combined_with_context: str, answers_only: str | None = None) -> int:
+    if answers_only:
+        answers = [a.strip() for a in answers_only.split("\n\n") if a.strip()]
+        if answers:
+            return len(answers)
+
+    if combined_with_context:
+        return max(1, len(re.findall(r"^Question:\s*", combined_with_context, re.M)))
+
+    return 1
+
+
+def _normalize_numbered_band9_answer(result: str, answer_count: int) -> str:
+    result = (result or "").strip()
+    if not result:
+        return result
+
+    matches = re.findall(r"(?im)^(answer\s*\d+)\s*[:\-]\s*(.*?)(?=^answer\s*\d+\s*[:\-]|\Z)", result, re.S | re.M)
+    if matches:
+        normalized = []
+        for i, (_, content) in enumerate(matches[:answer_count]):
+            normalized.append(f"Answer {i+1}: {content.strip()}")
+        return "\n\n".join(normalized)
+
+    lines = [line.strip() for line in re.split(r"[\r\n]+", result) if line.strip()]
+    if len(lines) >= answer_count:
+        return "\n\n".join([f"Answer {i+1}: {lines[i]}" for i in range(answer_count)])
+
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", result) if s.strip()]
+    if len(sentences) >= answer_count:
+        return "\n\n".join([f"Answer {i+1}: {sentences[i]}" for i in range(answer_count)])
+
+    return result
+
+
+BAND9_QUALITY_BAR = """
+A genuine Band 9 response, per the official IELTS Speaking Band Descriptors, must:
+- Fully develop the topic with relevant, coherent content - never a single clipped
+  summary sentence, however grammatically correct, since that fails "fully develops
+  topics" regardless of accuracy.
+- Use cohesive devices and connectives naturally and flexibly to link ideas together.
+- Use a wide range of vocabulary with precision, including natural idiomatic language
+  and effective paraphrase.
+- Use a full range of grammatical structures, naturally and accurately.
+- Read like something a fluent, articulate speaker would actually SAY out loud, not
+  like a formal written essay - natural spoken rhythm and phrasing, not stiff prose.
+"""
+
+BAND9_PART_INSTRUCTIONS = {
+    1: (
+        "Write ONE Band 9 answer per question. Each answer must be 2-3 full sentences "
+        "(never a single clipped phrase) so it shows real idea development - a direct "
+        "answer plus a reason, preference, or brief example - while still sounding like "
+        "natural, concise conversational speech appropriate for Part 1's personal-topic format."
+    ),
+    2: (
+        "Write ONE continuous Band 9 long-turn response of roughly 200-250 words - about "
+        "what a candidate would say speaking for 1-2 minutes without stopping. It MUST "
+        "explicitly cover every bullet point listed in the cue card question, as a single "
+        "flowing, well-organized talk using natural spoken discourse markers (e.g. 'to "
+        "begin with', 'what's more', 'overall') - NOT a short summary and NOT a list of "
+        "disconnected short answers."
+    ),
+    3: (
+        "Write ONE Band 9 answer per question. Each answer must be 3-5 sentences showing "
+        "real analytical depth - a clear position, supporting reasoning, and a specific "
+        "example or illustration - reflecting the sophistication expected in a Part 3 discussion."
+    ),
+}
+
+
+def _band9_word_count(text: str) -> int:
+    return len((text or "").split())
+
+
 def generate_band9_answer(part_number: int, combined_with_context: str, answers_only: str | None = None) -> str:
     overlap_text = answers_only or combined_with_context
+    answer_count = _count_band9_answers(combined_with_context, answers_only)
 
-    part_instructions = {
-        1: "Write 4-6 concise sentences. Remove all fillers. Be direct and confident.",
-        2: "Write 8-10 sentences with clear structure: opening, 3 developed points, conclusion. Use: Furthermore, In addition, To conclude.",
-        3: "Write 6-8 analytical sentences. Use: From a broader perspective, One could argue that, It is worth noting that."
-    }
-
+    numbered_lines = "\n".join([f"Answer {i+1}: <Band 9 response>" for i in range(answer_count)])
     prompt = f"""You are an IELTS Band 9 speaking examiner.
 
 A student gave these answers in IELTS Speaking Part {part_number}:
 
 {combined_with_context}
 
-Rewrite as ONE fluent Band 9 response.
+Rewrite these as genuine Band 9-quality responses to the SAME questions, keeping
+the student's original ideas/topic but expressed at Band 9 level.
+{BAND9_QUALITY_BAR}
+
+Output format:
+{numbered_lines}
 
 RULES:
 - Fix ALL grammar errors
@@ -791,7 +881,9 @@ RULES:
 - Replace basic words: help->facilitate, a lot of->a wide array of, get over->overcome, big->substantial
 - Use different sentence structures
 - Do not repeat "In my opinion" more than once
-- {part_instructions.get(part_number, part_instructions[1])}
+- Stay directly tied to each question, but FULLY DEVELOP the answer - do not
+  just compress it into the shortest possible correct sentence
+- {BAND9_PART_INSTRUCTIONS.get(part_number, BAND9_PART_INSTRUCTIONS[1])}
 
 TOPIC AWARENESS RULES:
 - Read the student's answer carefully and identify
@@ -816,10 +908,10 @@ TOPIC AWARENESS RULES:
 - The rewritten answer must sound like it was written
   by an expert on that specific topic
 
-Output the rewritten answer only. No labels. No explanation."""
+Output only the numbered answers. No extra labels. No explanation."""
 
     try:
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=OPENAI_TIMEOUT_SECONDS)
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
@@ -845,11 +937,167 @@ Output the rewritten answer only. No labels. No explanation."""
             )
             result = retry_response.choices[0].message.content.strip()
 
-        return result
+        # Part 2 must be a full long-turn talk (~200-250 words), not a
+        # one-line summary. If the model under-delivers on length, force
+        # one retry with an explicit word-count demand before accepting it.
+        if part_number == 2 and _band9_word_count(result) < 120:
+            logging.warning(f"[BAND9] Part 2 answer too short ({_band9_word_count(result)} words), retrying with length enforcement...")
+            length_retry_prompt = prompt + (
+                "\n\nREJECTED: Your previous answer was far too short for a Band 9 "
+                "Part 2 long-turn response. Write AT LEAST 200 words as ONE continuous "
+                "flowing talk that explicitly covers every bullet point in the cue card. "
+                "Do not summarize - develop each point with detail."
+            )
+            length_retry_response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": length_retry_prompt}],
+                temperature=0.7,
+                max_tokens=800
+            )
+            candidate = length_retry_response.choices[0].message.content.strip()
+            if _band9_word_count(candidate) > _band9_word_count(result):
+                result = candidate
+
+        return _normalize_numbered_band9_answer(result, answer_count)
 
     except Exception as e:
         logging.error(f"[BAND9 DIRECT CALL FAILED] {e}")
-        return answers_only if answers_only else combined_with_context
+        fallback = answers_only if answers_only else combined_with_context
+        if answer_count > 1:
+            parts = [p.strip() for p in (answers_only or combined_with_context).split("\n\n") if p.strip()]
+            if len(parts) >= answer_count:
+                return "\n".join([f"Answer {i+1}: {parts[i]}" for i in range(answer_count)])
+        return fallback
+
+
+RELEVANCE_NOTICE_MESSAGES = {
+    "completely_off_topic": "Your answer is not relevant to the topic of the question asked.",
+    "partially_off_topic": "Your answer only partly addresses the topic of the question asked.",
+}
+
+_RELEVANCE_FEEDBACK_PREFIX = {
+    "completely_off_topic": (
+        "Your answer did not address the question that was asked - this is the main reason "
+        "your score is capped here, more than any grammar or vocabulary issue below. Focus "
+        "first on directly answering what's asked. "
+    ),
+    "partially_off_topic": (
+        "Part of your answer drifted away from the question asked, which limited your score - "
+        "make sure every part of your response stays focused on what's actually being asked. "
+    ),
+}
+
+
+def _apply_relevance_to_feedback(feedback: dict, topic_relevance: str) -> dict:
+    """Ensure the written feedback doesn't contradict a topic-relevance score
+    cap. Without this, generate_mistakes() can hand back ordinary grammar/
+    vocabulary notes with no mention of why the score was actually capped,
+    making the written feedback and the number inconsistent with each other."""
+    if not isinstance(feedback, dict):
+        feedback = {}
+    prefix = _RELEVANCE_FEEDBACK_PREFIX.get(topic_relevance)
+    if prefix:
+        feedback["improvement"] = (prefix + str(feedback.get("improvement", "")).strip()).strip()
+    return feedback
+
+
+def _collect_completeness_notices(qas_clean: list) -> list:
+    """Pull the non-empty per-question completeness_notice values out of a
+    part's question list, in order, for surfacing at the part level."""
+    return [
+        str(qa.get("completeness_notice", "")).strip()
+        for qa in (qas_clean or [])
+        if isinstance(qa, dict) and str(qa.get("completeness_notice", "")).strip()
+    ]
+
+
+def _apply_completeness_to_feedback(feedback: dict, completeness_notices: list) -> dict:
+    """Ensure the written feedback explicitly explains it when a candidate
+    only answered part of a multi-part question (e.g. "Which jobs pay the
+    most? Why?" answered with only the "which" half). Without this, the
+    candidate sees a lower band and generic grammar/vocabulary notes with
+    no indication their answer was actually incomplete relative to the task."""
+    if not isinstance(feedback, dict):
+        feedback = {}
+    if completeness_notices:
+        prefix = (
+            "Part of the question wasn't fully answered, which affects your score "
+            "alongside any language issues below: " + " ".join(completeness_notices) + " "
+        )
+        feedback["improvement"] = (prefix + str(feedback.get("improvement", "")).strip()).strip()
+    return feedback
+
+
+def generate_ideal_band9_answer(part_number: int, questions: list) -> str:
+    """Generate a Band 9 model answer directly from the question(s), ignoring
+    the student's actual answer entirely. Used when the student's answer was
+    off-topic - generate_band9_answer() "polishes" the student's own words,
+    which is useless when those words were about the wrong subject. This
+    answers the question itself instead."""
+    questions = [str(q).strip() for q in (questions or []) if q and str(q).strip()]
+    if not questions:
+        return "Model answer unavailable."
+
+    answer_count = len(questions)
+    numbered_questions = "\n".join([f"{i + 1}. {q}" for i, q in enumerate(questions)])
+    numbered_lines = "\n".join([f"Answer {i + 1}: <Band 9 response>" for i in range(answer_count)])
+
+    prompt = f"""You are an IELTS Band 9 speaking examiner.
+
+The candidate's actual answer for IELTS Speaking Part {part_number} did not
+address the question asked (it was off-topic), so there is nothing usable
+in it to upgrade. Instead, write your OWN ideal Band 9 answer(s) directly
+to the question(s) below, as if a Band 9 candidate were answering them for
+the first time. Do NOT reference, reuse, or paraphrase the candidate's
+original (off-topic) answer.
+{BAND9_QUALITY_BAR}
+
+Question(s):
+{numbered_questions}
+
+Output format:
+{numbered_lines}
+
+RULES:
+- Answer the question(s) directly and specifically - do not go off-topic.
+- Use natural, idiomatic Band 9 vocabulary and varied, accurate grammar.
+- {BAND9_PART_INSTRUCTIONS.get(part_number, BAND9_PART_INSTRUCTIONS[1])}
+
+Output only the numbered answers. No extra labels. No explanation."""
+
+    try:
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=OPENAI_TIMEOUT_SECONDS)
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=800
+        )
+        result = response.choices[0].message.content.strip()
+        logging.warning(f"[IDEAL BAND9] part={part_number} words={len(result.split())}")
+
+        if part_number == 2 and _band9_word_count(result) < 120:
+            logging.warning(f"[IDEAL BAND9] Part 2 answer too short ({_band9_word_count(result)} words), retrying with length enforcement...")
+            length_retry_prompt = prompt + (
+                "\n\nREJECTED: Your previous answer was far too short for a Band 9 "
+                "Part 2 long-turn response. Write AT LEAST 200 words as ONE continuous "
+                "flowing talk that explicitly covers every bullet point in the cue card. "
+                "Do not summarize - develop each point with detail."
+            )
+            retry_response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": length_retry_prompt}],
+                temperature=0.7,
+                max_tokens=800
+            )
+            candidate = retry_response.choices[0].message.content.strip()
+            if _band9_word_count(candidate) > _band9_word_count(result):
+                result = candidate
+
+        return _normalize_numbered_band9_answer(result, answer_count)
+    except Exception as e:
+        logging.error(f"[IDEAL BAND9 FAILED] {e}")
+        return "Model answer unavailable."
 
 
 def generate_improvement(summary):
@@ -964,7 +1212,7 @@ Start your response with {{ and end with }}"""
 
     try:
         logging.warning(f"[MISTAKES CALLED] part={part_number}")
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=OPENAI_TIMEOUT_SECONDS)
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
@@ -995,93 +1243,496 @@ Start your response with {{ and end with }}"""
     }
 
 
+QUESTION_MISTAKES_FALLBACK = [
+    {"type": "fluency", "original": "", "corrected": "", "explanation": "Reduce hesitation and link ideas more clearly."},
+    {"type": "grammar", "original": "", "corrected": "", "explanation": "Review subject-verb agreement and sentence variety."},
+    {"type": "vocabulary", "original": "", "corrected": "", "explanation": "Replace basic words with more precise academic vocabulary."},
+    {"type": "pronunciation", "original": "", "corrected": "", "explanation": "Work on natural stress and rhythm in connected speech."},
+]
+
+
+def _validate_question_mistakes(items) -> list:
+    if not isinstance(items, list):
+        return []
+    valid = []
+    for item in items:
+        if (
+            isinstance(item, dict)
+            and item.get("type") in ("fluency", "grammar", "vocabulary", "pronunciation")
+            and "original" in item
+            and "corrected" in item
+        ):
+            valid.append({
+                "type": item.get("type"),
+                "original": str(item.get("original", "")),
+                "corrected": str(item.get("corrected", "")),
+                "explanation": str(item.get("explanation", "")),
+            })
+    return valid
+
+
+def generate_question_mistakes(question: str, answer: str) -> dict:
+    prompt = f"""You are a strict IELTS Speaking examiner.
+
+A student answered this question:
+Question: {question}
+Answer: {answer}
+
+STEP 1 - CHECK TASK COMPLETENESS FIRST:
+Many IELTS questions have more than one part - e.g. "Which kinds of jobs
+have the highest salaries in your country? Why is this?" asks BOTH which
+jobs AND why. Look carefully at the question and identify whether it has
+multiple distinct parts. Common patterns that signal multiple parts:
+- More than one question mark ("...? Why?", "...? When?", "...? How?")
+- A main question followed by a short follow-up word/clause: why, why is
+  this, why not, when, how, how often, where, what about, who, which,
+  do you agree, would you, and why/how/etc.
+- Two questions joined by "and" or "or" ("What...and why...?")
+- A request for both a description AND a reason/opinion/example
+For EACH distinct part you identify, check whether the answer clearly
+addresses it, not just one of them.
+- If one or more parts are NOT addressed, set "completeness_notice" to a
+  short, specific sentence naming exactly what was missed - e.g. "You
+  named which jobs pay well, but didn't explain why." or "You didn't say
+  when this typically happens."
+- If the question is genuinely single-part, or the answer addresses every
+  part it has, set "completeness_notice" to an empty string "".
+- Do not invent missing parts for a genuinely single-part question just
+  because the answer is short - only flag it when the QUESTION itself
+  asked for more than one thing.
+
+STEP 2 - IDENTIFY LANGUAGE ISSUES:
+Identify concrete issues in the student's answer covering these categories:
+fluency, grammar, vocabulary, pronunciation.
+
+RESPONSE FORMAT (STRICT JSON, NO MARKDOWN):
+- Return ONLY a valid JSON object (no prose, no code fences).
+- "mistakes": an array of 2-6 real issues covering fluency, grammar,
+  vocabulary, and pronunciation where relevant. If the answer is strong
+  for a category, still include one minor improvement for it. Each
+  object must have: "type" (fluency|grammar|vocabulary|pronunciation),
+  "original" (exact text from the student's answer), "corrected" (the
+  improved version), "explanation" (why it matters, 1 sentence). Use
+  exact candidate wording in "original"; keep spacing/punctuation. For
+  pronunciation, "original" should be the word/phrase likely
+  mispronounced based on word choice and sentence complexity, and
+  "corrected" should be brief stress/rhythm guidance.
+- "completeness_notice": string, per STEP 1 above.
+
+Return ONLY this structure:
+{{
+  "mistakes": [
+    {{"type": "grammar", "original": "", "corrected": "", "explanation": ""}},
+    {{"type": "vocabulary", "original": "", "corrected": "", "explanation": ""}}
+  ],
+  "completeness_notice": ""
+}}
+"""
+    try:
+        logging.warning(f"[QUESTION_MISTAKES] question={question[:50]} answer={answer[:50]}")
+        response = safe_gpt_call(
+            prompt,
+            fallback=None,
+            caller=call_gpt,
+        )
+        parsed = None
+        if isinstance(response, dict):
+            parsed = response
+        elif isinstance(response, str):
+            clean = response.strip().replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(clean)
+
+        if isinstance(parsed, dict):
+            mistakes = _validate_question_mistakes(parsed.get("mistakes"))
+            notice = str(parsed.get("completeness_notice", "") or "").strip()
+            if mistakes:
+                return {"mistakes": mistakes, "completeness_notice": notice}
+    except Exception as e:
+        logging.error(f"[QUESTION_MISTAKES FAIL] {e}")
+
+    return {"mistakes": QUESTION_MISTAKES_FALLBACK, "completeness_notice": ""}
+
+
+_RELEVANCE_STOPWORDS = {
+    "the", "a", "an", "is", "are", "was", "were", "am", "i", "you", "he", "she", "it", "we", "they",
+    "of", "to", "in", "on", "at", "as", "by", "for", "with", "and", "or", "but", "so", "because",
+    "that", "this", "these", "those", "my", "your", "our", "their", "his", "her", "its",
+    "do", "does", "did", "have", "has", "had", "be", "been", "being", "will", "would", "can", "could",
+    "think", "really", "very", "just", "like", "about", "also", "there", "which", "what", "how",
+    "when", "where", "why", "who", "if", "not", "no", "yes",
+    # Generic quantifiers/fillers that overlap across unrelated topics without
+    # signalling real topical connection (e.g. "most" in "most universities"
+    # vs "most popular" is not evidence the answer is on-topic).
+    "most", "some", "many", "much", "more", "less", "other", "every", "all",
+    "any", "each", "one", "two", "three", "get", "got", "going", "go",
+    "something", "anything", "everything", "usually", "often", "sometimes",
+    "typically", "generally", "quite", "pretty", "type", "types", "kind",
+}
+
+
+def _content_words(text: str) -> set:
+    words = str(text or "").lower().split()
+    return {
+        w.strip(".,!?;:\"'()") for w in words
+        if w.strip(".,!?;:\"'()") and w.strip(".,!?;:\"'()") not in _RELEVANCE_STOPWORDS
+    }
+
+
+def _heuristic_off_topic(qas_clean: list) -> bool:
+    """Backstop: flags a part as off-topic when at most one in four answers
+    shares any meaningful content word with its question. Acts as a floor
+    under the GPT self-reported topic_relevance so an off-topic submission
+    can't slip through as "on_topic" (e.g. via one incidental shared word)
+    and keep an inflated band."""
+    if not qas_clean:
+        return False
+    scored = 0
+    on_topic = 0
+    for qa in qas_clean:
+        q_words = _content_words(qa.get("question", ""))
+        a_words = _content_words(qa.get("user_answer", ""))
+        if not q_words or not a_words:
+            continue
+        scored += 1
+        if q_words & a_words:
+            on_topic += 1
+    if scored == 0:
+        return False
+    return (on_topic / scored) <= 0.25
+
+
+_SUBORDINATE_MARKERS = re.compile(
+    r"\b(because|although|though|which|that|while|since|unless|whereas|"
+    r"however|moreover|therefore|so that|in order to|if)\b",
+    re.IGNORECASE,
+)
+
+
+def _estimate_linguistic_floor(qas_clean: list) -> float:
+    """Even when an answer is off-topic, if the language actually used is
+    clearly substantial and complex (long, multi-clause, varied
+    vocabulary), fluency/lexical/grammar must not be allowed to crash to
+    Band 1-2 - those bands specifically require "no rateable language" /
+    "totally incoherent" speech, which a lengthy, grammatically complex
+    response plainly is not, regardless of whether it's on-topic.
+
+    This exists because the prompt-level instruction telling GPT not to
+    over-penalize below the topic-relevance cap was NOT reliably followed
+    in testing (observed real cases scoring 1/1/1 on fluent, complex,
+    off-topic answers) - same lesson as topic-relevance detection itself:
+    an instruction alone isn't enough, it needs a code-level backstop.
+
+    Returns a floor from 1.0 (trivial/no real answer) up to 4.5 (clearly
+    substantial, complex language). This is a MINIMUM, not a target - the
+    model's own score is still used whenever it's already at or above this.
+    """
+    combined = " ".join(
+        str(qa.get("user_answer", "")) for qa in (qas_clean or []) if qa.get("user_answer")
+    ).strip()
+    if not combined:
+        return 1.0
+
+    words = combined.split()
+    word_count = len(words)
+    if word_count == 0:
+        return 1.0
+
+    sentences = [s for s in re.split(r"[.!?]+", combined) if s.strip()]
+    sentence_count = max(1, len(sentences))
+    avg_sentence_len = word_count / sentence_count
+    subordinate_hits = len(_SUBORDINATE_MARKERS.findall(combined))
+    unique_words = {w.lower().strip(".,!?;:\"'()") for w in words}
+    diversity = len(unique_words) / word_count
+
+    length_signal = min(1.0, word_count / 150)
+    complexity_signal = min(1.0, avg_sentence_len / 20)
+    subordinate_signal = min(1.0, subordinate_hits / 6)
+    diversity_signal = min(1.0, diversity / 0.55)
+
+    substantiality = (
+        length_signal * 0.35
+        + complexity_signal * 0.25
+        + subordinate_signal * 0.25
+        + diversity_signal * 0.15
+    )
+
+    return round(1.0 + substantiality * 3.5, 1)
+
+
+def _aggregate_acoustic_pronunciation(raw_part_results: list) -> float | None:
+    """Average the real acoustic pronunciation_score (from librosa features via
+    compute_pronunciation_score) across every audio clip in a part. Returns
+    None when no acoustic data is available (e.g. all clips failed to
+    transcribe), so callers can fall back to text-only scoring."""
+    scores = []
+    for r in raw_part_results or []:
+        audio_metrics = r.get("audio_metrics") or {}
+        val = audio_metrics.get("pronunciation_score")
+        if isinstance(val, (int, float)):
+            scores.append(float(val))
+    if not scores:
+        return None
+    return sum(scores) / len(scores)
+
+
 def generate_scores(
     part_number: int,
-    combined_transcripts: str
+    combined_transcripts: str,
+    qas_clean: list | None = None,
+    acoustic_pronunciation: float | None = None
 ) -> dict:
     prompt = f"""You are a certified IELTS Speaking examiner.
 
-A student gave these answers in Part {part_number}:
+A student gave these answers in Part {part_number}. Each "Q:" is the
+question asked and each "A:" is the student's answer to it:
 
 {combined_transcripts}
 
-Score this student on the official IELTS 4 criteria.
-Use IELTS band descriptors strictly.
-Bands available: 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0
+Score this student on THREE of the official IELTS criteria - Fluency and
+Coherence, Lexical Resource, and Grammatical Range and Accuracy - using the
+FULL band scale below. Do NOT score Pronunciation; that is assessed
+separately from real audio evidence, not from this text. Do not default to
+the middle of the range - use whatever band the evidence actually
+supports, including bands 8-9 for excellent performance and bands 1-3 for
+very poor performance.
 
-Scoring guidance:
-- fluency: 4-5 if hesitant with fillers, 5.5-6 if mostly
-  fluent with some pausing, 6.5-7 if smooth and natural
-- lexical: 4-5 if basic everyday words only, 5.5-6 if
-  some range with occasional precise words, 6.5-7 if
-  varied and mostly precise vocabulary
-- grammar: 4-5 if frequent errors, 5.5-6 if errors do
-  not impede communication, 6.5-7 if mostly accurate
-  with good range of structures
-- pronunciation: 4-5 if effort needed to understand,
-  5.5-6 if generally clear with some L1 influence,
-  6.5-7 if easy to understand throughout
+Bands available: 1.0 to 9.0 in 0.5 increments.
+
+FLUENCY AND COHERENCE - explicitly assess ALL of these before scoring:
+- Hesitation: is it content-related (thinking about ideas) or
+  language-related (searching for words/grammar)? Language-related
+  hesitation scores lower.
+- Self-correction: rare and minor (high band) vs frequent and disruptive (low band).
+- Discourse markers / connectives: range and appropriacy of words like
+  "however", "moreover", "in that case" - used flexibly and correctly
+  (high band) vs repetitive, absent, or misused (low band).
+- Logical progression: do ideas build on each other coherently, or jump
+  around / lose the thread?
+- Answer completeness: is the response fully developed with detail and
+  examples, or does it stay superficial/underdeveloped?
+- 9: Fluent with only very occasional repetition/self-correction; any
+  hesitation is content-related, not a search for words or grammar; fully
+  develops topics coherently with fully appropriate cohesive features.
+- 8: Fluent with only occasional repetition/self-correction; hesitation is
+  usually content-related, rarely to search for language; topic
+  development is relevant, appropriate and coherent.
+- 7: Speaks at length without noticeable effort or loss of coherence; some
+  hesitation, repetition or self-correction; uses a range of connectives
+  and discourse markers with some flexibility.
+- 6: Willing to speak at length but may lose coherence at times due to
+  repetition, self-correction or hesitation; uses connectives and
+  discourse markers but not always appropriately.
+- 5: Usually maintains flow but relies on repetition, self-correction or
+  slow speech to keep going; may over-use certain connectives; simple
+  speech is fluent but more complex communication causes problems.
+- 4: Cannot keep going without noticeable pauses; slow speech with
+  frequent repetition; often self-corrects; links only simple sentences,
+  often repetitively; some breakdowns in coherence.
+- 3: Frequent, sometimes long, pauses; limited ability to link simple
+  sentences; gives only basic responses, cannot develop beyond that.
+- 2: Long pauses before nearly every word; isolated words may be
+  recognizable but speech has virtually no communicative significance.
+- 1: Speech is totally incoherent; no real communication possible.
+
+LEXICAL RESOURCE - explicitly assess ALL of these before scoring:
+- Repetition ratio: how often the same basic words/phrases are reused
+  instead of varying vocabulary - high repetition of simple words caps the band.
+- Collocation: are word pairings natural ("make a decision") or unnatural/
+  incorrect ("do a decision")?
+- Idiomatic usage: any natural idiomatic language, and is it used
+  correctly and appropriately (not forced)?
+- Paraphrasing: when a word is unknown or avoided, does the speaker
+  successfully rephrase, or do they get stuck / oversimplify?
+- Precision: are words chosen with exact, specific meaning, or are they
+  vague/generic ("thing", "stuff", "good", "nice")?
+- 9: Total flexibility and precise, natural use of vocabulary in all contexts.
+- 8: Wide vocabulary used fluently/flexibly for precise meaning; skilful
+  use of less common/idiomatic items despite occasional inaccuracy;
+  paraphrases effectively.
+- 7: Flexible vocabulary resource to discuss a variety of topics; some
+  less common/idiomatic vocabulary with some awareness of style and
+  collocation; paraphrases effectively.
+- 6: Vocabulary sufficient to discuss topics at length, meaning generally
+  clear despite inappropriacies; generally paraphrases successfully.
+- 5: Sufficient vocabulary for familiar and unfamiliar topics but limited
+  flexibility; attempts paraphrase, not always successful.
+- 4: Vocabulary sufficient for familiar topics only, meaning often
+  imprecise; rarely attempts paraphrase.
+- 3: Vocabulary resource limited, inadequate for unfamiliar topics.
+- 2: Very limited resource, essentially reduced to isolated words.
+- 1: No rateable vocabulary produced.
+
+GRAMMATICAL RANGE AND ACCURACY - this has TWO separate dimensions, both
+of which must be assessed together (a high score needs both range AND
+accuracy, not just a low error count):
+- Range: variety of structures attempted - simple sentences only, vs a mix
+  of simple/complex, vs a genuinely wide range (relative clauses,
+  conditionals, passive voice, varied tenses) used naturally.
+- Accuracy: how often those structures are grammatically correct, and
+  whether errors (when present) impede communication or are minor slips.
+- A speaker who uses only simple, error-free sentences has HIGH accuracy
+  but LOW range, and should NOT score as high as one who uses a wide range
+  of complex structures with only occasional errors.
+- 9: Full range of structures used naturally and appropriately;
+  consistently accurate apart from native-speaker-like slips.
+- 8: Wide range of structures used flexibly; majority of sentences
+  error-free; only occasional inappropriacies/non-systematic errors.
+- 7: Range of complex structures used with some flexibility; frequent
+  error-free sentences, though some mistakes persist.
+- 6: Mix of simple and complex structures but limited flexibility; errors
+  occur, especially in complex forms, but rarely impede communication.
+- 5: Basic sentence forms fairly well controlled; limited range of more
+  complex structures attempted, usually with errors, may need reformulation.
+- 4: Produces basic sentence forms and some correct simple sentences but
+  subordinate structures are rare; overall turns are short.
+- 3: Basic sentence forms attempted but grammatical errors are numerous
+  except in memorised utterances.
+- 2: No evidence of basic sentence forms.
+- 1: No rateable language produced.
 
 Part-specific notes:
 - Part 1 answers are typically shorter - mark accordingly
-- Part 2 long-turn answers should reward structure
-  and development with higher fluency/lexical scores
-  if demonstrated
+- Part 2 long-turn answers should reward structure and development with
+  higher fluency/lexical scores if demonstrated
 - Part 3 answers should reward analytical depth
+
+TOPIC RELEVANCE RULE (CRITICAL - CHECK THIS FIRST):
+- Compare each "A:" against its own "Q:" and judge whether the answer
+  actually addresses the subject the question asked about, not just
+  whether it is fluent, grammatical speech on some other subject.
+- Per the IELTS descriptors, Band 6+ Fluency and Coherence requires
+  "topic development is relevant, appropriate and coherent". An answer
+  that discusses a completely different topic than the question CANNOT
+  reach Band 6 or higher on ANY criterion, however well-formed the
+  language is, because it fails to address the task.
+- Set "topic_relevance" to exactly one of:
+  - "on_topic": most answers directly address their questions
+  - "partially_off_topic": answers drift from the question but keep some connection
+  - "completely_off_topic": most answers discuss an unrelated subject with no real connection to what was asked
+- If "topic_relevance" is "completely_off_topic", every score
+  (fluency, lexical, grammar) MUST be capped at 5.0 maximum.
+- If "topic_relevance" is "partially_off_topic", every score MUST be
+  capped at 6.0 maximum.
+- CRITICAL - DO NOT OVER-PENALIZE BELOW THE CAP: the cap above is a
+  MAXIMUM, not a target you should crash toward. Being off-topic affects
+  Coherence (task achievement), NOT the candidate's actual demonstrated
+  fluency, vocabulary range, or grammatical accuracy/range, which are
+  independent linguistic skills the candidate is still showing you, just
+  applied to the wrong subject. Score each criterion at whatever the
+  language quality genuinely supports, THEN apply the cap as a ceiling.
+  A fluent, grammatically complex, coherent answer on the wrong topic
+  should land AT the cap (e.g. 5.0), not fall to Band 1-3. Bands 1-3
+  require "no rateable language" / "totally incoherent" / "basic sentence
+  forms attempted but numerous errors" - reserve those ONLY for responses
+  that are ALSO linguistically weak on their own terms, independent of topic.
 
 Return ONLY this JSON object, no explanation, no markdown:
 {{
   "fluency": 5.0,
   "lexical": 5.0,
   "grammar": 5.0,
-  "pronunciation": 5.0
+  "topic_relevance": "on_topic"
 }}
 
-Return only numeric values. No strings. No explanation.
+Return only numeric values for the three scores. No strings there.
 Return only the JSON object. No markdown.
 No ```json fence. No explanation before or after.
 Start your response with {{ and end with }}"""
 
+    parsed = None
     try:
         logging.warning(f"[SCORES CALLED] part={part_number}")
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=OPENAI_TIMEOUT_SECONDS)
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
-            max_tokens=500
+            max_tokens=800
         )
         result = response.choices[0].message.content.strip()
         logging.warning(f"[SCORES RESULT] {result[:100]}")
         if result:
-            try:
-                clean = result.strip().replace("```json", "").replace("```", "").strip()
-                parsed = json.loads(clean)
-                if all(k in parsed for k in [
-                    "fluency", "lexical", "grammar", "pronunciation"
-                ]):
-                    validated = {}
-                    for k, v in parsed.items():
-                        try:
-                            score = float(v)
-                            if 4.0 <= score <= 9.0:
-                                validated[k] = score
-                            else:
-                                validated[k] = 5.0
-                        except (TypeError, ValueError):
-                            validated[k] = 5.0
-                    return validated
-            except (json.JSONDecodeError, ValueError):
-                pass
+            clean = result.strip().replace("```json", "").replace("```", "").strip()
+            candidate = json.loads(clean)
+            if all(k in candidate for k in ["fluency", "lexical", "grammar"]):
+                parsed = candidate
     except Exception as e:
         logging.error(f"[MISTAKES/SCORES FAIL] {e}")
 
-    return {
-        "fluency": 5.0,
-        "lexical": 5.0,
-        "grammar": 5.0,
-        "pronunciation": 5.0
-    }
+    if parsed is None:
+        parsed = {"fluency": 5.0, "lexical": 5.0, "grammar": 5.0, "topic_relevance": "on_topic"}
+
+    validated = {}
+    for k in ["fluency", "lexical", "grammar"]:
+        try:
+            score = float(parsed.get(k, 5.0))
+            validated[k] = score if 1.0 <= score <= 9.0 else 5.0
+        except (TypeError, ValueError):
+            validated[k] = 5.0
+
+    topic_relevance = str(parsed.get("topic_relevance", "on_topic")).strip().lower()
+    if topic_relevance not in ("on_topic", "partially_off_topic", "completely_off_topic"):
+        topic_relevance = "on_topic"
+
+    # Code-level safety net: don't rely solely on the model obeying the cap
+    # instruction above. If our own content-word overlap check finds ZERO
+    # connection between any answer and its question, force off-topic status.
+    if _heuristic_off_topic(qas_clean or []):
+        topic_relevance = "completely_off_topic"
+        logging.warning(f"[TOPIC RELEVANCE] Part {part_number}: heuristic overlap check forced completely_off_topic")
+
+    # The topic-relevance cap applies only to fluency/lexical/grammar - these
+    # are judged from what was SAID, so an off-topic answer legitimately
+    # caps them (Band 6+ Fluency and Coherence requires relevant topic
+    # development). Pronunciation is judged from how it SOUNDS, entirely
+    # independent of content, so it is deliberately excluded from this cap -
+    # a candidate can articulate clearly regardless of whether they answered
+    # the right question.
+    cap = {"completely_off_topic": 5.0, "partially_off_topic": 6.0}.get(topic_relevance)
+    if cap is not None:
+        logging.warning(f"[TOPIC RELEVANCE] Part {part_number}: {topic_relevance} -> capping scores at {cap}")
+        validated = {k: min(v, cap) for k, v in validated.items()}
+
+        # Code-level floor: the cap above is a ceiling, but GPT has been
+        # observed crashing scores all the way to Band 1 for off-topic
+        # answers even when the prompt explicitly says not to - despite the
+        # language itself being fluent, complex, and coherent. If the
+        # actual text is substantial, don't let it sit below what that
+        # substance deserves, capped at the same topic-relevance ceiling.
+        floor = min(cap, _estimate_linguistic_floor(qas_clean or []))
+        if floor > 1.0:
+            for k in ("fluency", "lexical", "grammar"):
+                if validated.get(k, 0) < floor:
+                    logging.warning(f"[LINGUISTIC FLOOR] Part {part_number}: {k} {validated[k]} -> {floor} (substantial language despite off-topic)")
+                    validated[k] = floor
+
+    # Pronunciation per the descriptors is fundamentally about how the
+    # answer SOUNDS (stress, intonation, pausing, articulation, pacing) -
+    # not about word choice or grammar. It is derived ENTIRELY from real
+    # acoustic evidence, with no text-based GPT guess involved at all, and
+    # is added AFTER the topic-relevance cap above so it is never affected
+    # by it.
+    if acoustic_pronunciation is not None:
+        validated["pronunciation"] = round(max(1.0, min(9.0, acoustic_pronunciation)) * 2) / 2
+        pronunciation_source = "audio_only"
+    else:
+        # No usable audio evidence at all (e.g. transcription/audio pipeline
+        # failure upstream) - neutral default rather than a text-based guess.
+        validated["pronunciation"] = 5.5
+        pronunciation_source = "unavailable"
+
+    validated["topic_relevance"] = topic_relevance
+    validated["pronunciation_source"] = pronunciation_source
+    return validated
+
+
+def _ielts_round_half_up(x: float) -> float:
+    """Official IELTS overall-band rounding: an average ending in .25 rounds
+    UP to the next half band, and .75 rounds UP to the next whole band -
+    i.e. round-half-up on the doubled value. Python's built-in round() uses
+    round-half-to-even, which silently rounds .25/.75 averages DOWN roughly
+    half the time (e.g. round(6.25*2)/2 = 6.0, not the correct 6.5)."""
+    return math.floor(x * 2 + 0.5) / 2
 
 
 def calculate_overall_band(
@@ -1089,81 +1740,49 @@ def calculate_overall_band(
     part2_scores: dict,
     part3_scores: dict
 ) -> float:
+    """Combine the three parts' criteria averages into one overall band.
 
-    all_scores = []
-    for scores in [part1_scores, part2_scores, part3_scores]:
-        if scores:
-            all_scores.extend([
-                scores.get("fluency", 5.0),
-                scores.get("lexical", 5.0),
-                scores.get("grammar", 5.0),
-                scores.get("pronunciation", 5.0)
-            ])
+    The IELTS descriptors themselves don't define this step - a real exam
+    assigns one holistic band per criterion for the whole test rather than
+    scoring parts separately. Since this system DOES score per part (for
+    granular feedback), Part 2 (long turn) and Part 3 (discussion) are
+    weighted more heavily than Part 1 (small talk), reflecting standard
+    IELTS examiner guidance that later parts are more diagnostic of overall
+    ability - not a rule taken from the descriptor sheet itself.
+    """
 
-    if not all_scores:
-        return 5.0
+    def _part_avg(scores):
+        if not scores:
+            return None
+        return (
+            scores.get("fluency", 5.0)
+            + scores.get("lexical", 5.0)
+            + scores.get("grammar", 5.0)
+            + scores.get("pronunciation", 5.0)
+        ) / 4
 
-    avg = sum(all_scores) / len(all_scores)
+    weighted_parts = [
+        (_part_avg(part1_scores), 0.25),
+        (_part_avg(part2_scores), 0.35),
+        (_part_avg(part3_scores), 0.40),
+    ]
+    present = [(avg, weight) for avg, weight in weighted_parts if avg is not None]
 
-    return round(avg * 2) / 2
+    if not present:
+        # Nothing was submitted for any part at all - per the descriptor's
+        # own Band 0 definition ("Does not attend / Does not complete the
+        # test"), this must be 0, not a generous middle-of-the-road guess.
+        return 0.0
 
+    total_weight = sum(weight for _, weight in present)
+    weighted_avg = sum(avg * weight for avg, weight in present) / total_weight
 
-
-
-
-def refine_feedback(summary):
-
-    if not summary or not isinstance(summary, dict):
-
-        return summary
-
-
-
-    improvements = summary.get("feedback", {}).get("improvements", "")
-
-    prompt = f"""
-
-You are an IELTS examiner.
-
-
-
-Improve this feedback to sound natural and professional.
-
-
-
-Make it:
-
-- concise
-
-- realistic
-
-- human-like
+    return _ielts_round_half_up(weighted_avg)
 
 
 
-Feedback:
-
-{improvements}
 
 
-
-Return improved version only.
-
-"""
-
-
-
-    res = safe_gpt_call(prompt, fallback=improvements, caller=call_gpt)
-
-    if res:
-
-        summary.setdefault("feedback", {})
-
-        summary["feedback"]["improvements"] = normalize_feedback(str(res))
-
-
-
-    return summary
 
 
 
@@ -1347,7 +1966,7 @@ Do NOT include explanations or markdown."""
 
 # ------------------------------------------------------------
 
-async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question: str = None, questions: str = None, debug: bool = False):
+def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question: str = None, questions: str = None, debug: bool = False):
 
     part_start = time.time()
 
@@ -1355,7 +1974,7 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
 
     if not audio_bytes or len(audio_bytes) < 1000:
 
-        print({"event": "audio_error", "part": part, "reason": "invalid_audio_bytes"})
+        logger.error({"event": "audio_error", "part": part, "reason": "invalid_audio_bytes"})
 
         return {
 
@@ -1375,19 +1994,53 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
 
         }
 
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+
+        logger.error({"event": "audio_error", "part": part, "reason": "audio_too_large", "size_bytes": len(audio_bytes)})
+
+        return {
+
+            "part": part,
+
+            "error": "audio_too_large",
+
+            "message": f"Uploaded audio is {len(audio_bytes) / (1024 * 1024):.1f}MB, which exceeds the {MAX_AUDIO_BYTES // (1024 * 1024)}MB limit per clip",
+
+            "transcript": "",
+
+            "audio_metrics": {},
+
+            "result": None,
+
+            "processing_time": round(time.time() - part_start, 3)
+
+        }
+
     audio_hash = hashlib.sha256(audio_bytes).hexdigest()
 
     # Convert to wav once using in-memory bytes
 
     dummy_upload = type("DummyUpload", (), {"file": io.BytesIO(audio_bytes)})
 
-    wav_path = normalize_to_wav(dummy_upload)
+    try:
+        wav_path = normalize_to_wav(dummy_upload)
+    except RuntimeError as exc:
+        logger.error({"event": "audio_error", "part": part, "reason": "conversion_exception", "error": str(exc)})
+        return {
+            "part": part,
+            "error": "conversion_failed",
+            "message": str(exc),
+            "transcript": "",
+            "audio_metrics": {},
+            "result": None,
+            "processing_time": round(time.time() - part_start, 3)
+        }
 
 
 
     if (not os.path.exists(wav_path)) or (os.path.getsize(wav_path) < 2000):
 
-        print({"event": "audio_error", "part": part, "reason": "conversion_failed"})
+        logger.error({"event": "audio_error", "part": part, "reason": "conversion_failed"})
 
         return {
 
@@ -1409,7 +2062,13 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
 
 
 
-    # Cap overly long audio to keep Whisper fast
+    # Cap overly long audio to keep Whisper fast, and reject audio too
+    # short/near-empty to contain real speech BEFORE handing it to Whisper.
+    # Whisper's mel-spectrogram computation produces a zero-length feature
+    # tensor for near-silent/empty input, which crashes deep inside its
+    # decoding code with a cryptic tensor-reshape error rather than a clear
+    # message - catching it here up front gives a real, actionable error
+    # instead ("cannot reshape tensor of 0 elements...").
 
     try:
 
@@ -1419,39 +2078,67 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
 
             _trim_wav(wav_path, 90)
 
+        if dur_sec < 0.3:
+
+            logger.error({"event": "audio_error", "part": part, "reason": "audio_too_short", "duration_sec": dur_sec})
+
+            return {
+
+                "part": part,
+
+                "error": "audio_too_short",
+
+                "message": f"Audio is only {dur_sec:.2f}s long - too short or silent to transcribe.",
+
+                "transcript": "",
+
+                "audio_metrics": {},
+
+                "result": None,
+
+                "processing_time": round(time.time() - part_start, 3)
+
+            }
+
     except Exception as exc:
 
-        print({"event": "audio_warn", "part": part, "reason": "duration_check_failed", "details": str(exc)})
+        logger.warning({"event": "audio_warn", "part": part, "reason": "duration_check_failed", "details": str(exc)})
 
 
 
-    if audio_hash in _ASR_CACHE:
+    cached_entry, asr_hit = _ASR_CACHE.get(audio_hash)
 
-        transcript = _ASR_CACHE[audio_hash]
+    if asr_hit:
+
+        transcript, real_asr_confidence = cached_entry
+
+        logger.info({"event": "asr_cache_hit", "part": part, "audio_hash": audio_hash[:16], "transcript_preview": (transcript or "")[:60]})
 
     else:
 
-        if WHISPER_MODEL is None:
+        if not WHISPER_AVAILABLE:
 
             raise RuntimeError("Whisper model not available; install dependencies.")
 
         try:
 
-            print({"event": "transcription_start", "part": part})
+            logger.info({"event": "transcription_start", "part": part, "audio_hash": audio_hash[:16]})
 
-            transcript = WHISPER_MODEL.transcribe(
+            question_context = question if question and str(question).strip().lower() != "string" else None
+
+            transcript, real_asr_confidence = transcribe_audio(
 
                 wav_path,
 
-                fp16=False,
+                question=question_context,
 
-                verbose=False
+                return_confidence=True,
 
-            )["text"]
+            )
 
         except Exception as exc:
 
-            print({"event": "audio_error", "part": part, "reason": "transcription_failed", "details": str(exc)})
+            logger.error({"event": "audio_error", "part": part, "reason": "transcription_failed", "details": str(exc)})
 
             return {
 
@@ -1471,25 +2158,27 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
 
             }
 
-        _ASR_CACHE[audio_hash] = transcript
+        _ASR_CACHE.set(audio_hash, (transcript, real_asr_confidence))
 
 
 
-    if audio_hash in _FEATURE_CACHE:
+    cached_metrics, feature_hit = _FEATURE_CACHE.get(audio_hash)
 
-        audio_metrics = _FEATURE_CACHE[audio_hash].copy()
+    if feature_hit:
+
+        audio_metrics = cached_metrics.copy()
 
     else:
 
         audio_metrics = extract_acoustic_features(wav_path, transcript)
 
-        _FEATURE_CACHE[audio_hash] = audio_metrics.copy()
+        _FEATURE_CACHE.set(audio_hash, audio_metrics.copy())
 
 
 
     if not transcript or not transcript.strip():
 
-        print({"event": "audio_error", "part": part, "reason": "no_speech_detected"})
+        logger.error({"event": "audio_error", "part": part, "reason": "no_speech_detected"})
 
         return {
 
@@ -1525,7 +2214,13 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
 
     audio_metrics["duration_valid"] = duration >= 45
 
-    audio_metrics["asr_confidence"] = 0.9 if transcript.strip() else 0.6
+    # Genuine confidence from Whisper's own per-segment avg_logprob/
+    # no_speech_prob (see _estimate_confidence in audio_transcriber.py) -
+    # previously this was a hardcoded 0.9 whenever the transcript was
+    # merely non-empty, which meant the "low confidence" dampening logic
+    # below (and throughout the pronunciation/fluency fusion code) could
+    # essentially never trigger regardless of how unclear the audio was.
+    audio_metrics["asr_confidence"] = real_asr_confidence if transcript.strip() else 0.0
 
     audio_metrics["pronunciation_score"] = compute_pronunciation_score(audio_metrics, audio_metrics["asr_confidence"])
 
@@ -1561,7 +2256,7 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
 
         except Exception as exc:
 
-            print({"event": "question_parse_failed", "details": str(exc), "raw": questions})
+            logger.warning({"event": "question_parse_failed", "details": str(exc), "raw": questions})
 
 
 
@@ -1577,7 +2272,18 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
 
 
 
-    answers = split_transcript_with_gpt(transcript, question_list) if question_list else [transcript]
+    # With exactly one question (the normal case for this endpoint - one
+    # audio clip per question), there is nothing to split: the whole
+    # transcript IS the answer. Use it verbatim rather than routing it
+    # through GPT's "split" prompt, which was asked to keep answers
+    # "concise but meaningful" - an instruction that invites paraphrasing/
+    # condensing, silently altering the candidate's actual spoken words.
+    # Only genuinely multi-question audio (multiple questions answered in
+    # one recording) needs GPT to divide the transcript at all.
+    if len(question_list) <= 1:
+        answers = [transcript]
+    else:
+        answers = split_transcript_with_gpt(transcript, question_list)
 
     if len(answers) != len(question_list):
 
@@ -1589,7 +2295,7 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
 
 
 
-    print({
+    logger.info({
 
         "part": part,
 
@@ -1608,23 +2314,28 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
     for idx, q in enumerate(question_list):
 
         ans = answers[idx] if idx < len(answers) else ""
+        if not ans:
+            ans = transcript
 
-        eval_text = f"Question: {q}\nAnswer: {ans}"
+        # NOTE: this used to also call evaluate_speaking_part() here and
+        # store its output as qa_result/"result". That function runs a full
+        # GPT call plus heavy regex/audio post-processing per question, but
+        # nothing downstream ever reads qa_pairs[i]["result"] - the actual
+        # scores shown to the user always come from generate_scores() later
+        # in this endpoint, a completely separate code path. Removed as
+        # pure wasted work (traced end-to-end with zero consumers) - this
+        # was one of the biggest contributors to overall latency.
+        qa_result = {}
 
-        qa_result = evaluate_speaking_part(
-            part=part,
-            transcript=eval_text,
-            audio_metrics=audio_metrics
-        )
-
-        try:
-            qa_result = sanitize_result(qa_result)
-        except Exception as e:
-            print("sanitize_result error:", e)
-            qa_result = {}
-
-        if not qa_result:
-            qa_result = {}
+        question_result = generate_question_mistakes(q, ans) if ans else {
+            "mistakes": [
+                {"type": "fluency", "original": "", "corrected": "", "explanation": "No answer to check."},
+                {"type": "grammar", "original": "", "corrected": "", "explanation": "No answer to check."},
+                {"type": "vocabulary", "original": "", "corrected": "", "explanation": "No answer to check."},
+                {"type": "pronunciation", "original": "", "corrected": "", "explanation": "No answer to check."},
+            ],
+            "completeness_notice": "",
+        }
 
         evaluated_qas.append({
 
@@ -1632,12 +2343,22 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
 
             "answer": ans,
 
-            "result": qa_result
+            "user_answer": ans,
+
+            "result": qa_result,
+
+            "mistakes": question_result.get("mistakes", []),
+
+            "completeness_notice": question_result.get("completeness_notice", ""),
 
         })
 
 
 
+    # NOTE: this used to call evaluate_speaking_part() again here on the
+    # combined transcript. Same as above - part_result["result"] has no
+    # consumer downstream (the real scores come from generate_scores()),
+    # so this was a second full GPT call per audio clip for nothing.
     if question_list:
 
         combined_eval_text = "\n\n".join(
@@ -1646,41 +2367,11 @@ async def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question:
 
         )
 
-        # Reuse single QA evaluation when only one question is present
-
-        if len(evaluated_qas) == 1:
-
-            result = evaluated_qas[0]["result"]
-
-        else:
-
-            result = evaluate_speaking_part(
-
-                part=part,
-
-                transcript=combined_eval_text,
-
-                audio_metrics=audio_metrics
-
-            )
-
-            result = sanitize_result(result)
-
     else:
 
         combined_eval_text = f"Question: {clean_question}\nAnswer: {transcript}" if clean_question else transcript
 
-        result = evaluate_speaking_part(
-
-            part=part,
-
-            transcript=combined_eval_text,
-
-            audio_metrics=audio_metrics
-
-        )
-
-        result = sanitize_result(result)
+    result = {}
 
 
 
@@ -1797,8 +2488,11 @@ async def evaluate_question_wise_audio(
 
 ):
 
-    test_result = safe_gpt_call("Say the word HELLO only.")
-    print(f"[GPT TEST] result={test_result}")
+    if not _check_rate_limit():
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: max {_RATE_LIMIT_THRESHOLD} requests per {_RATE_LIMIT_WINDOW_SECONDS} seconds. Please try again shortly."
+        )
 
     audios = [
 
@@ -1836,29 +2530,34 @@ async def evaluate_question_wise_audio(
 
     if len(filtered) == 0:
 
-        return {"error": "no_audio_provided"}
+        raise HTTPException(status_code=400, detail="no_audio_provided: at least one audio file with a matching question is required")
 
     if len(filtered) > 15:
 
-        return {"error": "max_15_questions_allowed"}
+        raise HTTPException(status_code=400, detail="max_15_questions_allowed: at most 15 audio/question pairs are supported per request")
 
 
+
+    # Read every uploaded file's bytes up front (cheap, no CPU/GPT cost),
+    # then run all audio processing CONCURRENTLY instead of one-at-a-time.
+    # _evaluate_speaking_part_audio() is genuinely synchronous internally
+    # (ffmpeg subprocess, Whisper, librosa, GPT calls - no real await
+    # points), so asyncio.gather() alone would NOT parallelize it; it needs
+    # to actually run in a thread pool via asyncio.to_thread() to get real
+    # concurrency. Each audio clip's transcription/scoring is fully
+    # independent of the others, so this turns what used to be N strictly
+    # sequential 10-40s pipelines into one N-way concurrent batch - by far
+    # the largest lever on overall request latency (up to 15 audio clips).
+    audio_byte_pairs = [(await audio_file.read(), question) for audio_file, question in filtered]
+
+    part_results = await asyncio.gather(*[
+        asyncio.to_thread(_evaluate_speaking_part_audio, audio_bytes=audio_bytes, part=1, question=question)
+        for audio_bytes, question in audio_byte_pairs
+    ])
 
     results = []
 
-    for audio_file, question in filtered:
-
-        audio_bytes = await audio_file.read()
-
-        part_result = await _evaluate_speaking_part_audio(
-
-            audio_bytes=audio_bytes,
-
-            part=1,
-
-            question=question
-
-        )
+    for (_, question), part_result in zip(audio_byte_pairs, part_results):
 
         if isinstance(part_result, dict):
 
@@ -1869,7 +2568,7 @@ async def evaluate_question_wise_audio(
                 try:
                     part_result["result"] = sanitize_result(pr)
                 except Exception as e:
-                    print("sanitize_result error:", e)
+                    logger.error("sanitize_result error: %s", e)
                     part_result["result"] = {}
 
             if not part_result.get("result"):
@@ -1877,13 +2576,30 @@ async def evaluate_question_wise_audio(
 
 
 
+        qa_pairs = part_result.get("qa_pairs", []) or []
+        first_answer = ""
+        if isinstance(qa_pairs, list) and qa_pairs:
+            first_answer = str(qa_pairs[0].get("answer", "")).strip()
+        if not first_answer:
+            first_answer = str(part_result.get("transcript", "")).strip()
+
         results.append({
 
             "question": question,
 
             "transcript": part_result.get("transcript"),
 
-            "result": part_result.get("result")
+            "result": part_result.get("result"),
+
+            "qa_pairs": qa_pairs,
+
+            "user_answer": first_answer,
+
+            "audio_error": part_result.get("error"),
+
+            "audio_error_message": part_result.get("message") or part_result.get("details"),
+
+            "audio_metrics": part_result.get("audio_metrics")
 
         })
 
@@ -1891,33 +2607,11 @@ async def evaluate_question_wise_audio(
 
     results = [r for r in results if r.get("question") and str(r["question"]).strip().lower() != "string"]
 
-
-
-    scored_results = [r["result"] for r in results if isinstance(r.get("result"), dict)]
-
-    if scored_results:
-
-        avg_fluency = sum(r.get("fluency", 0) for r in scored_results) / len(scored_results)
-
-        avg_lexical = sum(r.get("lexical", 0) for r in scored_results) / len(scored_results)
-
-        avg_grammar = sum(r.get("grammar", 0) for r in scored_results) / len(scored_results)
-
-        avg_pronunciation = sum(r.get("pronunciation", 0) for r in scored_results) / len(scored_results)
-
-        raw_overall = (avg_fluency + avg_lexical + avg_grammar + avg_pronunciation) / 4
-
-        try:
-            overall_band = round_to_ielts_band(raw_overall)
-        except Exception as e:
-            print("band rounding error:", e)
-            overall_band = 5.0
-
-    else:
-
-        overall_band = None
-
-
+    # NOTE: this used to also compute a local "overall_band" here from
+    # scored_results/avg_fluency/etc. That value was never actually used -
+    # the real overall_band in the final response always comes from
+    # calculate_overall_band() further down (using generate_scores()'
+    # output), a completely separate computation. Removed as dead work.
 
     # Build part-wise aggregation using cue-card detection
     def is_cue_card(question_text: str) -> bool:
@@ -1930,11 +2624,50 @@ async def evaluate_question_wise_audio(
             return True
         return False
 
-    def _clean_result(r):
-        return {
-            "question": str(r.get("question", "")).strip(),
-            "user_answer": str(r.get("transcript", "")).strip()
-        }
+    def _extract_answer_from_text(text: str) -> str:
+        text = str(text or "").strip()
+        if not text:
+            return ""
+        if "Answer:" in text:
+            return text.split("Answer:", 1)[1].strip()
+        return text
+
+    def _build_question_items(r):
+        qa_pairs = r.get("qa_pairs") or []
+        items = []
+
+        if isinstance(qa_pairs, list) and qa_pairs:
+            for qa in qa_pairs:
+                q_text = str(qa.get("question", "")).strip()
+                answer_text = str(qa.get("answer", "")).strip() or str(qa.get("user_answer", "")).strip()
+                if not answer_text:
+                    answer_text = _extract_answer_from_text(qa.get("transcript", ""))
+                if not answer_text:
+                    answer_text = str(r.get("user_answer", "")).strip() or str(r.get("transcript", "")).strip()
+                if q_text or answer_text:
+                    item = {
+                        "question": q_text,
+                        "user_answer": answer_text,
+                        "mistakes": qa.get("mistakes", []) if isinstance(qa, dict) else [],
+                        "completeness_notice": qa.get("completeness_notice", "") if isinstance(qa, dict) else "",
+                    }
+                    if not answer_text and r.get("audio_error"):
+                        item["audio_error"] = r.get("audio_error")
+                        item["audio_error_message"] = r.get("audio_error_message")
+                    items.append(item)
+            return items
+
+        q_text = str(r.get("question", "")).strip()
+        user_answer = str(r.get("user_answer", "")).strip()
+        if not user_answer:
+            user_answer = _extract_answer_from_text(r.get("transcript", ""))
+        if q_text or user_answer:
+            item = {"question": q_text, "user_answer": user_answer, "mistakes": [], "completeness_notice": ""}
+            if not user_answer and r.get("audio_error"):
+                item["audio_error"] = r.get("audio_error")
+                item["audio_error_message"] = r.get("audio_error_message")
+            return [item]
+        return []
 
     part_1_qas = []
     part_2_qas = []
@@ -1956,44 +2689,25 @@ async def evaluate_question_wise_audio(
         part_2_qas = []
         part_3_qas = results[3:]
 
-    part_1_qas_clean = [_clean_result(r) for r in part_1_qas]
-    part_2_qas_clean = [_clean_result(r) for r in part_2_qas]
-    part_3_qas_clean = [_clean_result(r) for r in part_3_qas]
+    part_1_qas_clean = []
+    for r in part_1_qas:
+        part_1_qas_clean.extend(_build_question_items(r))
 
-    try:
-        part_1_summary = normalize_summary_bands(refine_feedback(_aggregate_part(part_1_qas)))
-    except Exception as e:
-        print("normalize_summary_bands error:", e)
-        part_1_summary = {}
+    part_2_qas_clean = []
+    for r in part_2_qas:
+        part_2_qas_clean.extend(_build_question_items(r))
 
-    try:
-        part_2_summary = normalize_summary_bands(refine_feedback(_aggregate_part(part_2_qas)))
-    except Exception as e:
-        print("normalize_summary_bands error:", e)
-        part_2_summary = {}
+    part_3_qas_clean = []
+    for r in part_3_qas:
+        part_3_qas_clean.extend(_build_question_items(r))
 
-    try:
-        part_3_summary = normalize_summary_bands(refine_feedback(_aggregate_part(part_3_qas)))
-    except Exception as e:
-        print("normalize_summary_bands error:", e)
-        part_3_summary = {}
-
-
-
-    for summary in [part_1_summary, part_2_summary, part_3_summary]:
-
-        if isinstance(summary, dict):
-
-            summary["fluency"] = round_to_ielts_band(summary.get("fluency"))
-            summary["lexical"] = round_to_ielts_band(summary.get("lexical"))
-            summary["grammar"] = round_to_ielts_band(summary.get("grammar"))
-            summary["pronunciation"] = round_to_ielts_band(summary.get("pronunciation"))
-
-            fb = summary.get("feedback", {})
-
-            if isinstance(fb, dict) and fb.get("improvements"):
-
-                fb["improvements"] = clean_feedback(fb.get("improvements", ""))
+    # NOTE: this used to also compute part_1_summary/part_2_summary/
+    # part_3_summary here via a call to _aggregate_part(), a function that
+    # is never defined anywhere in this codebase - every call raised
+    # NameError, was silently swallowed by the except block, and logged a
+    # spurious error on every single request. The resulting summaries were
+    # never used downstream either. Removed entirely as dead, error-logging
+    # work.
 
     def _combine_context(qas_clean):
         return "\n\n".join(
@@ -2026,14 +2740,6 @@ async def evaluate_question_wise_audio(
     p2_combined_transcripts = _combine_transcripts(part_2_qas)
     p3_combined_transcripts = _combine_transcripts(part_3_qas)
 
-    band9_part1 = generate_band9_answer(1, p1_combined_context, answers_only=p1_answers_only) if p1_combined_context else p1_answers_only
-    band9_part2 = generate_band9_answer(2, p2_combined_context, answers_only=p2_answers_only) if p2_combined_context else p2_answers_only
-    band9_part3 = generate_band9_answer(3, p3_combined_context, answers_only=p3_answers_only) if p3_combined_context else p3_answers_only
-
-    vocab_part1 = generate_vocabulary(1, p1_combined_transcripts) if p1_combined_transcripts else VOCAB_FALLBACK_PART1
-    vocab_part2 = generate_vocabulary(2, p2_combined_transcripts) if p2_combined_transcripts else VOCAB_FALLBACK_PART2
-    vocab_part3 = generate_vocabulary(3, p3_combined_transcripts) if p3_combined_transcripts else VOCAB_FALLBACK_PART3
-
     def _combined_for_feedback(qas_clean):
         return "\n\n".join(
             [
@@ -2043,17 +2749,100 @@ async def evaluate_question_wise_audio(
             ]
         ).strip()
 
+    # NOTE: a second, out-of-date copy of _build_question_items() used to be
+    # defined here, redundant with the one above and never called (it was
+    # defined AFTER part_1_qas_clean/part_2_qas_clean/part_3_qas_clean were
+    # already built using the real one). Removed as dead duplicate code -
+    # exactly the kind of trap where someone edits the wrong copy.
+
     p1_feedback_text = _combined_for_feedback(part_1_qas_clean)
     p2_feedback_text = _combined_for_feedback(part_2_qas_clean)
     p3_feedback_text = _combined_for_feedback(part_3_qas_clean)
 
-    p1_scores = generate_scores(1, p1_feedback_text) if p1_feedback_text else {"fluency": 5.0, "lexical": 5.0, "grammar": 5.0, "pronunciation": 5.0}
-    p2_scores = generate_scores(2, p2_feedback_text) if p2_feedback_text else {"fluency": 5.0, "lexical": 5.0, "grammar": 5.0, "pronunciation": 5.0}
-    p3_scores = generate_scores(3, p3_feedback_text) if p3_feedback_text else {"fluency": 5.0, "lexical": 5.0, "grammar": 5.0, "pronunciation": 5.0}
+    p1_acoustic_pron = _aggregate_acoustic_pronunciation(part_1_qas)
+    p2_acoustic_pron = _aggregate_acoustic_pronunciation(part_2_qas)
+    p3_acoustic_pron = _aggregate_acoustic_pronunciation(part_3_qas)
 
-    p1_feedback = generate_mistakes(1, p1_feedback_text) if p1_feedback_text else {}
-    p2_feedback = generate_mistakes(2, p2_feedback_text) if p2_feedback_text else {}
-    p3_feedback = generate_mistakes(3, p3_feedback_text) if p3_feedback_text else {}
+    # A part with zero real answer content means the candidate did not
+    # attempt it at all - per the descriptor's own Band 0 definition
+    # ("Does not attend / Does not complete the test"), that must score 0,
+    # not a generous middle-of-the-road default. This previously defaulted
+    # to 5.0, silently rewarding a non-attempt with a passing-looking band.
+    _default_scores = {"fluency": 0.0, "lexical": 0.0, "grammar": 0.0, "pronunciation": 0.0, "topic_relevance": "on_topic", "pronunciation_source": "unavailable"}
+    p1_not_attempted = not p1_feedback_text
+    p2_not_attempted = not p2_feedback_text
+    p3_not_attempted = not p3_feedback_text
+
+    async def _immediate(value):
+        return value
+
+    # WAVE 1: vocabulary, scores, and mistakes for all 3 parts are fully
+    # independent of each other's results - none of these 9 GPT calls need
+    # anything the others produce. Run them all concurrently in a thread
+    # pool instead of one after another (this used to be ~9 sequential
+    # blocking calls; now it's bounded by the single slowest one).
+    vocab_part1, vocab_part2, vocab_part3, p1_scores, p2_scores, p3_scores, p1_feedback, p2_feedback, p3_feedback = await asyncio.gather(
+        asyncio.to_thread(generate_vocabulary, 1, p1_combined_transcripts) if p1_combined_transcripts else _immediate(VOCAB_FALLBACK_PART1),
+        asyncio.to_thread(generate_vocabulary, 2, p2_combined_transcripts) if p2_combined_transcripts else _immediate(VOCAB_FALLBACK_PART2),
+        asyncio.to_thread(generate_vocabulary, 3, p3_combined_transcripts) if p3_combined_transcripts else _immediate(VOCAB_FALLBACK_PART3),
+        asyncio.to_thread(generate_scores, 1, p1_feedback_text, part_1_qas_clean, p1_acoustic_pron) if p1_feedback_text else _immediate(dict(_default_scores)),
+        asyncio.to_thread(generate_scores, 2, p2_feedback_text, part_2_qas_clean, p2_acoustic_pron) if p2_feedback_text else _immediate(dict(_default_scores)),
+        asyncio.to_thread(generate_scores, 3, p3_feedback_text, part_3_qas_clean, p3_acoustic_pron) if p3_feedback_text else _immediate(dict(_default_scores)),
+        asyncio.to_thread(generate_mistakes, 1, p1_feedback_text) if p1_feedback_text else _immediate({}),
+        asyncio.to_thread(generate_mistakes, 2, p2_feedback_text) if p2_feedback_text else _immediate({}),
+        asyncio.to_thread(generate_mistakes, 3, p3_feedback_text) if p3_feedback_text else _immediate({}),
+    )
+
+    p1_topic_relevance = p1_scores.pop("topic_relevance", "on_topic")
+    p2_topic_relevance = p2_scores.pop("topic_relevance", "on_topic")
+    p3_topic_relevance = p3_scores.pop("topic_relevance", "on_topic")
+
+    p1_pronunciation_source = p1_scores.pop("pronunciation_source", "unavailable")
+    p2_pronunciation_source = p2_scores.pop("pronunciation_source", "unavailable")
+    p3_pronunciation_source = p3_scores.pop("pronunciation_source", "unavailable")
+
+    def _extract_questions(qas_clean):
+        seen = []
+        for qa in qas_clean or []:
+            q = str(qa.get("question", "")).strip()
+            if q and q not in seen:
+                seen.append(q)
+        return seen
+
+    _OFF_TOPIC_TIERS = ("completely_off_topic", "partially_off_topic")
+
+    # WAVE 2: band9 answers depend on each part's topic_relevance (from
+    # Wave 1), so they have to wait for that - but the 3 parts are still
+    # independent of EACH OTHER, so run all 3 concurrently rather than
+    # sequentially. If the student's answer didn't address the question,
+    # "polishing" it via generate_band9_answer() would just produce a
+    # fluent version of the WRONG topic; generate_ideal_band9_answer()
+    # instead writes a fresh model answer straight from the question.
+    band9_part1, band9_part2, band9_part3 = await asyncio.gather(
+        asyncio.to_thread(generate_ideal_band9_answer, 1, _extract_questions(part_1_qas_clean))
+        if p1_topic_relevance in _OFF_TOPIC_TIERS
+        else (asyncio.to_thread(generate_band9_answer, 1, p1_combined_context, answers_only=p1_answers_only) if p1_combined_context else _immediate(p1_answers_only)),
+
+        asyncio.to_thread(generate_ideal_band9_answer, 2, _extract_questions(part_2_qas_clean))
+        if p2_topic_relevance in _OFF_TOPIC_TIERS
+        else (asyncio.to_thread(generate_band9_answer, 2, p2_combined_context, answers_only=p2_answers_only) if p2_combined_context else _immediate(p2_answers_only)),
+
+        asyncio.to_thread(generate_ideal_band9_answer, 3, _extract_questions(part_3_qas_clean))
+        if p3_topic_relevance in _OFF_TOPIC_TIERS
+        else (asyncio.to_thread(generate_band9_answer, 3, p3_combined_context, answers_only=p3_answers_only) if p3_combined_context else _immediate(p3_answers_only)),
+    )
+
+    p1_completeness_notices = _collect_completeness_notices(part_1_qas_clean)
+    p2_completeness_notices = _collect_completeness_notices(part_2_qas_clean)
+    p3_completeness_notices = _collect_completeness_notices(part_3_qas_clean)
+
+    p1_feedback = _apply_relevance_to_feedback(p1_feedback, p1_topic_relevance)
+    p2_feedback = _apply_relevance_to_feedback(p2_feedback, p2_topic_relevance)
+    p3_feedback = _apply_relevance_to_feedback(p3_feedback, p3_topic_relevance)
+
+    p1_feedback = _apply_completeness_to_feedback(p1_feedback, p1_completeness_notices)
+    p2_feedback = _apply_completeness_to_feedback(p2_feedback, p2_completeness_notices)
+    p3_feedback = _apply_completeness_to_feedback(p3_feedback, p3_completeness_notices)
 
     part_1 = {
 
@@ -2073,6 +2862,16 @@ async def evaluate_question_wise_audio(
         "band9_answer": band9_part1,
 
         "vocabulary_to_learn": vocab_part1,
+
+        "relevance_notice": RELEVANCE_NOTICE_MESSAGES.get(p1_topic_relevance),
+
+        "completeness_notice": " ".join(p1_completeness_notices) or None,
+
+        "topic_relevance": p1_topic_relevance,
+
+        "pronunciation_source": p1_pronunciation_source,
+
+        "not_attempted": p1_not_attempted,
 
     }
 
@@ -2095,6 +2894,16 @@ async def evaluate_question_wise_audio(
 
         "vocabulary_to_learn": vocab_part2,
 
+        "relevance_notice": RELEVANCE_NOTICE_MESSAGES.get(p2_topic_relevance),
+
+        "completeness_notice": " ".join(p2_completeness_notices) or None,
+
+        "topic_relevance": p2_topic_relevance,
+
+        "pronunciation_source": p2_pronunciation_source,
+
+        "not_attempted": p2_not_attempted,
+
     }
 
     part_3 = {
@@ -2115,6 +2924,16 @@ async def evaluate_question_wise_audio(
         "band9_answer": band9_part3,
 
         "vocabulary_to_learn": vocab_part3,
+
+        "relevance_notice": RELEVANCE_NOTICE_MESSAGES.get(p3_topic_relevance),
+
+        "completeness_notice": " ".join(p3_completeness_notices) or None,
+
+        "topic_relevance": p3_topic_relevance,
+
+        "pronunciation_source": p3_pronunciation_source,
+
+        "not_attempted": p3_not_attempted,
 
     }
 
@@ -2140,7 +2959,7 @@ async def evaluate_question_wise_audio(
 
 
 
-    print({
+    logger.info({
 
         "mode": "part_wise",
 
