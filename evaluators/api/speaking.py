@@ -1,8 +1,9 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from uuid import uuid4
 
 from utils.audio_transcriber import transcribe_audio
 from utils.audio_features import extract_audio_features
+from utils.audio_normalizer import normalize_to_wav
 from evaluators.speaking import evaluate_speaking_part
 from storage.speaking_store import SPEAKING_ATTEMPTS
 
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/speaking", tags=["Speaking"])
 async def upload_speaking_audio(
     part: int,
     file: UploadFile = File(...),
-    attempt_id: str | None = None
+    attempt_id: str | None = Form(None)
 ):
     if part not in [1, 2, 3]:
         raise HTTPException(status_code=400, detail="Invalid part number")
@@ -31,9 +32,9 @@ async def upload_speaking_audio(
             raise HTTPException(status_code=400, detail="Invalid attempt_id")
 
     # ---- AUDIO PROCESSING ----
-    transcript = transcribe_audio(file)
-    file.file.seek(0)  # reset pointer consumed by transcriber
-    audio_metrics = extract_audio_features(file)
+    wav_path = normalize_to_wav(file)
+    transcript = transcribe_audio(wav_path)
+    audio_metrics = extract_audio_features(wav_path)
 
     # Speech rate (WPM)
     words = len(transcript.split())
