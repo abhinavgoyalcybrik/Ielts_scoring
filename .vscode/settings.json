@@ -1,7 +1,15 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:system",
-    "python.defaultInterpreterPath": "C:\\Users\\MSI\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
-    "python.analysis.extraPaths": [
-        "C:\\Users\\MSI\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages"
-    ]
+  "python.analysis.exclude": [
+    ".venv",
+    ".venv/**",
+    "**/node_modules",
+    "**/__pycache__"
+  ],
+  "python.analysis.ignore": [
+    ".venv"
+  ],
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.python",
+    "editor.formatOnSave": true
+  }
 }
