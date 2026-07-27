@@ -2486,6 +2486,36 @@ async def evaluate_question_wise_audio(
 
     question_15: str = Form(None),
 
+    part_number_1: str = Form(None),
+
+    part_number_2: str = Form(None),
+
+    part_number_3: str = Form(None),
+
+    part_number_4: str = Form(None),
+
+    part_number_5: str = Form(None),
+
+    part_number_6: str = Form(None),
+
+    part_number_7: str = Form(None),
+
+    part_number_8: str = Form(None),
+
+    part_number_9: str = Form(None),
+
+    part_number_10: str = Form(None),
+
+    part_number_11: str = Form(None),
+
+    part_number_12: str = Form(None),
+
+    part_number_13: str = Form(None),
+
+    part_number_14: str = Form(None),
+
+    part_number_15: str = Form(None),
+
 ):
 
     if not _check_rate_limit():
@@ -2516,11 +2546,21 @@ async def evaluate_question_wise_audio(
 
     ]
 
+    part_numbers = [
+
+        part_number_1, part_number_2, part_number_3, part_number_4, part_number_5,
+
+        part_number_6, part_number_7, part_number_8, part_number_9, part_number_10,
+
+        part_number_11, part_number_12, part_number_13, part_number_14, part_number_15
+
+    ]
+
 
 
     filtered = [
 
-        (a, q) for a, q in zip(audios, questions)
+        (a, q, p) for a, q, p in zip(audios, questions, part_numbers)
 
         if a is not None and q is not None
 
@@ -2548,16 +2588,16 @@ async def evaluate_question_wise_audio(
     # independent of the others, so this turns what used to be N strictly
     # sequential 10-40s pipelines into one N-way concurrent batch - by far
     # the largest lever on overall request latency (up to 15 audio clips).
-    audio_byte_pairs = [(await audio_file.read(), question) for audio_file, question in filtered]
+    audio_byte_pairs = [(await audio_file.read(), question, part_no) for audio_file, question, part_no in filtered]
 
     part_results = await asyncio.gather(*[
         asyncio.to_thread(_evaluate_speaking_part_audio, audio_bytes=audio_bytes, part=1, question=question)
-        for audio_bytes, question in audio_byte_pairs
+        for audio_bytes, question, _ in audio_byte_pairs
     ])
 
     results = []
 
-    for (_, question), part_result in zip(audio_byte_pairs, part_results):
+    for (_, question, part_no), part_result in zip(audio_byte_pairs, part_results):
 
         if isinstance(part_result, dict):
 
@@ -2586,6 +2626,8 @@ async def evaluate_question_wise_audio(
         results.append({
 
             "question": question,
+
+            "part_no": part_no,
 
             "transcript": part_result.get("transcript"),
 
@@ -2672,22 +2714,46 @@ async def evaluate_question_wise_audio(
     part_1_qas = []
     part_2_qas = []
     part_3_qas = []
-    cue_card_found = False
 
-    for r in results:
-        question_text = r.get("question") or r.get("question_text", "")
-        if not cue_card_found and is_cue_card(question_text):
-            part_2_qas.append(r)
-            cue_card_found = True
-        elif not cue_card_found:
-            part_1_qas.append(r)
-        else:
-            part_3_qas.append(r)
+    # Prefer the caller-supplied part number for every question over guessing
+    # from question text. The cue-card heuristic below only looks at whether
+    # a question *looks like* a Part 2 prompt (contains "|", starts with
+    # "describe", or is a long sentence) and otherwise splits purely by
+    # position - it has no way to know a Part 3 discussion question wasn't
+    # meant to be Part 1, and a Part 2 prompt that doesn't match the pattern
+    # silently corrupts the whole split. When every result carries an
+    # explicit, valid part_no, trust it completely and skip the heuristic.
+    explicit_part_map = {1: part_1_qas, 2: part_2_qas, 3: part_3_qas}
 
-    if not cue_card_found:
-        part_1_qas = results[:3]
-        part_2_qas = []
-        part_3_qas = results[3:]
+    def _valid_part_no(value) -> int | None:
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed in (1, 2, 3) else None
+
+    all_parts_explicit = len(results) > 0 and all(_valid_part_no(r.get("part_no")) is not None for r in results)
+
+    if all_parts_explicit:
+        for r in results:
+            explicit_part_map[_valid_part_no(r.get("part_no"))].append(r)
+    else:
+        cue_card_found = False
+
+        for r in results:
+            question_text = r.get("question") or r.get("question_text", "")
+            if not cue_card_found and is_cue_card(question_text):
+                part_2_qas.append(r)
+                cue_card_found = True
+            elif not cue_card_found:
+                part_1_qas.append(r)
+            else:
+                part_3_qas.append(r)
+
+        if not cue_card_found:
+            part_1_qas = results[:3]
+            part_2_qas = []
+            part_3_qas = results[3:]
 
     part_1_qas_clean = []
     for r in part_1_qas:
