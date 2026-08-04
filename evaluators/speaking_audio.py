@@ -56,7 +56,7 @@ import re
 
 from difflib import SequenceMatcher
 
-import whisper
+import faster_whisper
 
 import os
 
@@ -688,11 +688,27 @@ def split_transcript_with_gpt(transcript: str, questions: list):
 
     prompt = f"""
 You are given an IELTS speaking response that covers multiple questions in
-one continuous transcript.
+one continuous transcript. The candidate was asked these questions IN ORDER
+and answered them one after another in a single take - the transcript is
+one unbroken timeline, not a jumbled bag of topics.
 
 Your task:
 Split the transcript into separate answers for EACH question, using ONLY
 the candidate's EXACT original words for each segment.
+
+CRITICAL - SPLIT BY SPEAKING ORDER, NOT BY TOPIC SIMILARITY:
+- The N-th answer segment must be the part of the transcript the candidate
+  spoke in response to the N-th question, in the SAME chronological order
+  the questions were asked - never reorder or search the transcript for
+  whichever segment merely sounds most topically related.
+- Two different questions can be about closely related topics (e.g. "what
+  makes a show popular" and "do people watch too much TV") - do NOT assign
+  a segment to a question just because its topic seems relevant; assign it
+  based on WHERE in the timeline it was actually spoken, immediately after
+  the previous question's segment ended.
+- The segments, concatenated in order, should reconstruct the transcript
+  from start to end with no gaps and no overlaps - every word belongs to
+  exactly one answer.
 
 CRITICAL - DO NOT MODIFY THE CANDIDATE'S WORDS:
 - Copy each answer segment VERBATIM from the transcript - do not paraphrase,
@@ -703,14 +719,13 @@ CRITICAL - DO NOT MODIFY THE CANDIDATE'S WORDS:
 
 IMPORTANT:
 - Number of answers MUST equal number of questions
-- Each answer should correspond to the most relevant part of the transcript
 - Do NOT merge answers
 - Do NOT skip any question
 
-Questions:
+Questions (in the order asked):
 {questions}
 
-Transcript:
+Transcript (one continuous timeline, in speaking order):
 {transcript}
 
 Return a JSON array of answers in order (no extra text).
@@ -1174,9 +1189,21 @@ Return ONLY this JSON object, no explanation, no markdown:
   "fluency": "specific feedback with example from their answer",
   "grammar": "specific feedback with example from their answer",
   "vocabulary": "specific feedback with example from their answer",
-  "pronunciation": "specific feedback based on their word choices and sentence patterns",
+  "pronunciation": "one general, honest, text-grounded observation - not a fabricated claim about specific stress/intonation you didn't actually hear",
   "improvement": "one specific actionable tip for THIS student based on their actual answers"
 }}
+
+DO NOT FLAG (CRITICAL - this is SPOKEN language, not writing):
+This is a transcript of something the student SAID out loud, not something
+they wrote. Never flag, correct, or mention punctuation, capitalization, or
+spelling - any of that in this text is a transcription artifact added by
+automatic speech-to-text, not something the candidate did wrong.
+
+WHAT NOT TO CRITIQUE (CRITICAL): never comment on whether an opinion is
+correct, sensible, or well-reasoned - there is no "correct" opinion in
+IELTS Speaking, only the language used to express it. Never penalize
+British vs American vocabulary/word choice. You only have text, never
+audio, so never claim to know or comment on the candidate's accent.
 
 RULES:
 - fluency: comment on their use of fillers (yeah, you know,
@@ -1189,20 +1216,25 @@ RULES:
   suggest a better alternative
   Example: 'Instead of "a lot of clubs" consider
   using "a wide array of clubs"'
-- pronunciation: based on their vocabulary choices and
-  sentence complexity, comment on likely stress and
-  rhythm patterns they should work on
+- pronunciation: this is TEXT ONLY - you have no audio, so do NOT claim to
+  diagnose specific stress/intonation patterns as if you heard them. Give
+  one general, honest, text-grounded observation instead (e.g. that longer
+  or more complex sentences in their answer are worth rehearsing for pacing
+  and clarity). Do not invent a claim about how a specific word was
+  actually pronounced.
 - Keep each feedback to 2 sentences maximum
 - Be specific, not generic
 - Do NOT return template sentences
 CRITICAL RULES FOR EVERY CRITERION:
-- Never say the student "demonstrated good" anything
-- Never say the student "performed well" on anything
-- Never use words like: good, great, excellent, well done,
-  impressive, effectively, successfully
-- Every criterion MUST contain one specific improvement point
-- If the student did something well, still find ONE small
-  thing they can improve and mention that instead
+- Only include a criterion's feedback if there is a genuine, specific issue
+  to point to - do NOT invent or manufacture an issue just to have
+  something to say. If a criterion is genuinely strong with nothing
+  specific to flag, it is fine to give brief genuine, specific praise
+  instead of forcing a fabricated criticism.
+- Avoid generic, unsubstantiated praise ("performed well", "did a great
+  job") with no specific evidence behind it - but a specific, accurate
+  positive observation (e.g. "correctly used the third conditional in
+  'if I had...'") is fine and should not be avoided just to sound critical.
 - Format: quote their exact words → explain the issue
   → show the correct version or better alternative
 - Keep each feedback to 2 sentences maximum
@@ -1251,6 +1283,13 @@ QUESTION_MISTAKES_FALLBACK = [
 ]
 
 
+def _normalize_for_mistake_comparison(text: str) -> list:
+    """Strip punctuation and case, so a purely punctuation/capitalization
+    'correction' can be detected and discarded - not left to rely on the
+    GPT prompt alone."""
+    return re.sub(r"[^\w\s]", "", text).lower().split()
+
+
 def _validate_question_mistakes(items) -> list:
     if not isinstance(items, list):
         return []
@@ -1262,10 +1301,20 @@ def _validate_question_mistakes(items) -> list:
             and "original" in item
             and "corrected" in item
         ):
+            original = str(item.get("original", ""))
+            corrected = str(item.get("corrected", ""))
+            # This is a transcript of speech, not writing - punctuation and
+            # capitalization are transcription artifacts, not something the
+            # candidate did wrong. The prompt already instructs GPT not to
+            # generate these, but instruction-following isn't guaranteed, so
+            # this is a hard backstop: if the only difference between
+            # "original" and "corrected" is punctuation/case, discard it.
+            if _normalize_for_mistake_comparison(original) == _normalize_for_mistake_comparison(corrected):
+                continue
             valid.append({
                 "type": item.get("type"),
-                "original": str(item.get("original", "")),
-                "corrected": str(item.get("corrected", "")),
+                "original": original,
+                "corrected": corrected,
                 "explanation": str(item.get("explanation", "")),
             })
     return valid
@@ -1288,7 +1337,15 @@ multiple distinct parts. Common patterns that signal multiple parts:
   this, why not, when, how, how often, where, what about, who, which,
   do you agree, would you, and why/how/etc.
 - Two questions joined by "and" or "or" ("What...and why...?")
-- A request for both a description AND a reason/opinion/example
+- A request for both a description AND a reason/opinion/example - but ONLY
+  when the question TEXT itself asks for the reason (contains words like
+  "why", "because", "explain", "reason"). Do NOT treat a plain factual
+  question as multi-part just because a fuller answer COULD have included
+  more explanation. Counter-example: "What types of TV shows are most
+  popular in your country?" is SINGLE-part - it only asks WHAT, not why -
+  so an answer that names the types (e.g. "reality shows and daily soaps
+  are popular") is complete. Do not flag "didn't explain why they're
+  popular" here; that reason was never asked for.
 For EACH distinct part you identify, check whether the answer clearly
 addresses it, not just one of them.
 - If one or more parts are NOT addressed, set "completeness_notice" to a
@@ -1300,16 +1357,53 @@ addresses it, not just one of them.
 - Do not invent missing parts for a genuinely single-part question just
   because the answer is short - only flag it when the QUESTION itself
   asked for more than one thing.
+- CRITICAL: an explicit "there is/are none" answer IS a complete, valid
+  answer to that part - do NOT flag it as missing. E.g. if asked "what
+  special food is connected with this?" and the candidate says "there is
+  no special food for this, but..." they HAVE answered that part (the
+  answer is "none") - do not say they "didn't specify" or "didn't
+  mention" it.
+- If this looks like a Part 2 cue-card prompt (a long prompt with several
+  bullet points, e.g. containing "|" or multiple "should say" / "describe"
+  clauses), do NOT require literal coverage of every single bullet - a
+  natural 1-2 minute spoken answer often runs out of time before covering
+  every bullet, and real IELTS scoring does not penalize this. Only set a
+  completeness_notice here if the response barely engages with the topic
+  at all, not merely because one minor bullet point was skipped.
 
 STEP 2 - IDENTIFY LANGUAGE ISSUES:
 Identify concrete issues in the student's answer covering these categories:
 fluency, grammar, vocabulary, pronunciation.
 
+DO NOT FLAG (CRITICAL - this is SPOKEN language, not writing):
+This is a transcript of something the student SAID out loud, not something
+they wrote. Never flag, correct, or mention:
+- Punctuation (commas, periods, question marks, etc.) - the student never
+  "typed" punctuation; any punctuation in this text was added by automatic
+  speech-to-text transcription, not the speaker.
+- Capitalization - same reason, this is a transcription artifact.
+- Spelling of words - the student spoke words, they did not spell them;
+  a "misspelling" in this text is a transcription error, not something the
+  candidate did wrong.
+- Sentence fragments that are only "wrong" in written-text terms (natural
+  spoken English is full of run-ons, trailing clauses, and restarts that
+  are completely normal in speech and are NOT grammar errors).
+Only flag issues a listener would actually notice when hearing the answer
+spoken aloud: wrong verb tense, subject-verb agreement, article/preposition
+errors, wrong word choice, awkward word order, filler words, imprecise
+vocabulary, and similar genuinely spoken-language issues.
+
 RESPONSE FORMAT (STRICT JSON, NO MARKDOWN):
 - Return ONLY a valid JSON object (no prose, no code fences).
-- "mistakes": an array of 2-6 real issues covering fluency, grammar,
-  vocabulary, and pronunciation where relevant. If the answer is strong
-  for a category, still include one minor improvement for it. Each
+- "mistakes": an array of 0-6 REAL issues covering fluency, grammar,
+  vocabulary, and pronunciation where relevant. Only include something
+  here if it is a genuine issue you can point to in the answer - do NOT
+  invent a "correction" for a category just to have something to say
+  about it. A phrase that is already natural and correct (e.g. "daily
+  trivia") must NOT be "corrected" into something else just to fill a
+  quota - if a category has no real issue, leave it out of the array
+  entirely. It is completely fine, and expected for a strong answer, to
+  return fewer items or even an empty array. Each
   object must have: "type" (fluency|grammar|vocabulary|pronunciation),
   "original" (exact text from the student's answer), "corrected" (the
   improved version), "explanation" (why it matters, 1 sentence). Use
@@ -1345,8 +1439,15 @@ Return ONLY this structure:
         if isinstance(parsed, dict):
             mistakes = _validate_question_mistakes(parsed.get("mistakes"))
             notice = str(parsed.get("completeness_notice", "") or "").strip()
-            if mistakes:
-                return {"mistakes": mistakes, "completeness_notice": notice}
+            # A successfully parsed response is authoritative even if it
+            # found zero genuine issues - a strong answer can legitimately
+            # have no real mistakes, and silently swapping that in for the
+            # generic QUESTION_MISTAKES_FALLBACK below would fabricate
+            # criticism (e.g. "reduce hesitation") that wasn't actually
+            # true of this specific answer. Only the fallback path (GPT
+            # call failed, or returned something unparseable) should use
+            # the generic placeholder.
+            return {"mistakes": mistakes, "completeness_notice": notice}
     except Exception as e:
         logging.error(f"[QUESTION_MISTAKES FAIL] {e}")
 
@@ -1475,18 +1576,67 @@ def _aggregate_acoustic_pronunciation(raw_part_results: list) -> float | None:
     return sum(scores) / len(scores)
 
 
+def _aggregate_speech_timing(raw_part_results: list) -> dict | None:
+    """Average speech_rate_wpm and sum duration_sec across every audio clip in
+    a part, so generate_scores() can weigh real pacing evidence (too slow /
+    too fast) instead of having zero access to timing data - mirrors
+    _aggregate_acoustic_pronunciation() above. Returns None when no timing
+    data is available at all."""
+    wpm_values = []
+    total_duration = 0.0
+    for r in raw_part_results or []:
+        audio_metrics = r.get("audio_metrics") or {}
+        wpm = audio_metrics.get("speech_rate_wpm")
+        if isinstance(wpm, (int, float)) and wpm > 0:
+            wpm_values.append(float(wpm))
+        duration = audio_metrics.get("duration_sec")
+        if isinstance(duration, (int, float)) and duration > 0:
+            total_duration += float(duration)
+    if not wpm_values and total_duration <= 0:
+        return None
+    return {
+        "avg_wpm": (sum(wpm_values) / len(wpm_values)) if wpm_values else None,
+        "total_duration_sec": round(total_duration, 1) if total_duration > 0 else None,
+    }
+
+
 def generate_scores(
     part_number: int,
     combined_transcripts: str,
     qas_clean: list | None = None,
-    acoustic_pronunciation: float | None = None
+    acoustic_pronunciation: float | None = None,
+    speech_timing: dict | None = None
 ) -> dict:
+    pacing_section = ""
+    if speech_timing:
+        avg_wpm = speech_timing.get("avg_wpm")
+        total_duration = speech_timing.get("total_duration_sec")
+        pacing_lines = []
+        if avg_wpm:
+            pacing_lines.append(f"- Measured average speech rate: {avg_wpm:.0f} words per minute.")
+        if total_duration:
+            pacing_lines.append(f"- Measured total spoken duration for this part: {total_duration:.0f} seconds.")
+        if pacing_lines:
+            pacing_section = "\n\nSPEECH PACING EVIDENCE (real measured data, weigh alongside the transcript):\n" + "\n".join(pacing_lines) + """
+- This is EVIDENCE to consider, not a separate score or override - use it to
+  inform Fluency and Coherence, not as a rule you mechanically apply.
+- A clearly slow rate (roughly under 100 WPM) sustained across the answer is
+  consistent with the effortful, hesitant pattern described at Band 5 and
+  below - weigh it alongside what the transcript itself shows.
+- A clearly fast rate (roughly over 200 WPM) can indicate rhythm/clarity
+  breakdown rather than genuine fluency - do not reward raw speed by itself.
+- For Part 2 specifically: a full long turn is normally expected to run
+  roughly 60 seconds or more. A markedly shorter duration limits how much
+  development, structure, and range the candidate had room to demonstrate -
+  factor this into the Answer Completeness assessment below (this is about
+  what evidence exists to judge, not a separate penalty)."""
+
     prompt = f"""You are a certified IELTS Speaking examiner.
 
 A student gave these answers in Part {part_number}. Each "Q:" is the
 question asked and each "A:" is the student's answer to it:
 
-{combined_transcripts}
+{combined_transcripts}{pacing_section}
 
 Score this student on THREE of the official IELTS criteria - Fluency and
 Coherence, Lexical Resource, and Grammatical Range and Accuracy - using the
@@ -1503,11 +1653,26 @@ FLUENCY AND COHERENCE - explicitly assess ALL of these before scoring:
   language-related (searching for words/grammar)? Language-related
   hesitation scores lower.
 - Self-correction: rare and minor (high band) vs frequent and disruptive (low band).
+- Repetition as a stalling tactic: repeating a word or restarting a sentence
+  to buy thinking time is a lower-band signal, distinct from repetition used
+  as a genuine (if unsophisticated) cohesive device.
+- Pause location: a pause between sentences/ideas is far less costly than a
+  pause mid-sentence or mid-phrase, which more strongly signals
+  language-access difficulty rather than normal thinking time.
 - Discourse markers / connectives: range and appropriacy of words like
   "however", "moreover", "in that case" - used flexibly and correctly
-  (high band) vs repetitive, absent, or misused (low band).
+  (high band) vs repetitive, absent, or misused (low band). Note both
+  failure modes: relying only on "and/but/because/so" caps around Band 4-5,
+  but mechanically overusing formal connectives ("furthermore", "moreover")
+  without natural need is itself a Band 6-ish sign of un-natural, rehearsed
+  usage rather than genuine flexible range.
 - Logical progression: do ideas build on each other coherently, or jump
   around / lose the thread?
+- Willingness to produce long turns: from Band 6 up this is required -
+  a one-line or minimal-effort answer to a question that invites
+  development caps the score regardless of how clean the little language
+  produced is, simply because there isn't enough evidence of sustained
+  fluency to justify a higher band.
 - Answer completeness: is the response fully developed with detail and
   examples, or does it stay superficial/underdeveloped?
 - 9: Fluent with only very occasional repetition/self-correction; any
@@ -1537,14 +1702,30 @@ FLUENCY AND COHERENCE - explicitly assess ALL of these before scoring:
 LEXICAL RESOURCE - explicitly assess ALL of these before scoring:
 - Repetition ratio: how often the same basic words/phrases are reused
   instead of varying vocabulary - high repetition of simple words caps the band.
+- Repeating the question's own vocabulary back verbatim instead of
+  rephrasing it in the candidate's own words is a lower-range signal, even
+  when the answer is otherwise coherent.
+- Topical range: can the candidate discuss only familiar, personal topics
+  (Band 5 territory), or do they sustain vocabulary on less familiar/more
+  abstract topics too (Band 6+)? This is specifically about range across
+  topic types, not just quantity of words used.
 - Collocation: are word pairings natural ("make a decision") or unnatural/
   incorrect ("do a decision")?
 - Idiomatic usage: any natural idiomatic language, and is it used
-  correctly and appropriately (not forced)?
+  correctly and appropriately (not forced)? Note: idiomatic/less-common
+  vocabulary is a real gate for Band 7 - competent but entirely common,
+  everyday vocabulary caps around Band 6 even if used accurately throughout.
 - Paraphrasing: when a word is unknown or avoided, does the speaker
-  successfully rephrase, or do they get stuck / oversimplify?
+  successfully rephrase, or do they get stuck / oversimplify? This is a
+  second, separate gate for Band 7 - accurate vocabulary without any
+  paraphrasing ability still caps around Band 6.
 - Precision: are words chosen with exact, specific meaning, or are they
   vague/generic ("thing", "stuff", "good", "nice")?
+- Register/style awareness: does the vocabulary suit the context - e.g.
+  noticeably slangy/casual language in an analytical Part 3 answer, or
+  stiff, over-formal "book" language in a casual Part 1 answer, both signal
+  weaker style awareness than vocabulary that's appropriately pitched to
+  the part.
 - 9: Total flexibility and precise, natural use of vocabulary in all contexts.
 - 8: Wide vocabulary used fluently/flexibly for precise meaning; skilful
   use of less common/idiomatic items despite occasional inaccuracy;
@@ -1573,6 +1754,18 @@ accuracy, not just a low error count):
 - A speaker who uses only simple, error-free sentences has HIGH accuracy
   but LOW range, and should NOT score as high as one who uses a wide range
   of complex structures with only occasional errors.
+- Error type matters, not just error count: a systematic error repeated
+  every time a structure is attempted (e.g. always getting past tense
+  wrong, or always misusing an article) signals a real gap in control and
+  should weigh more heavily than a single one-off slip that isn't repeated.
+- Tense control deserves particular attention where the task naturally
+  demands it - past tense narration in Part 2 long turns, and conditionals
+  in Part 3 hypothetical/opinion discussion - since consistent errors there
+  are strong evidence either way.
+- Articles, prepositions, and subject-verb agreement are the most common
+  persistent errors that keep an otherwise fluent, coherent candidate capped
+  around Band 6 - weigh their frequency specifically, not just whether an
+  error happened to occur somewhere.
 - 9: Full range of structures used naturally and appropriately;
   consistently accurate apart from native-speaker-like slips.
 - 8: Wide range of structures used flexibly; majority of sentences
@@ -1625,6 +1818,32 @@ TOPIC RELEVANCE RULE (CRITICAL - CHECK THIS FIRST):
   require "no rateable language" / "totally incoherent" / "basic sentence
   forms attempted but numerous errors" - reserve those ONLY for responses
   that are ALSO linguistically weak on their own terms, independent of topic.
+
+POSSIBLY MEMORISED / REHEARSED ANSWER:
+- If an answer sounds noticeably rehearsed or templated - a register/style
+  that doesn't match the rest of the candidate's speech, generic content
+  that doesn't specifically respond to the actual question asked, or
+  suspiciously polished phrasing inconsistent with the candidate's
+  demonstrated level elsewhere - this is a real IELTS concern (the
+  descriptors themselves note "no rateable language unless memorised" at
+  the lowest bands). Judge the language as actually demonstrated, not the
+  apparent rehearsed fluency, and weigh whether it genuinely responds to
+  what was asked.
+
+WHAT NOT TO SCORE (CRITICAL - these must NEVER influence any score):
+- Do not judge whether an opinion is correct, sensible, or well-reasoned as
+  a matter of factual/logical content - there is no "correct" opinion in
+  IELTS Speaking. Only the LANGUAGE used to express it is assessed.
+- Do not penalize a candidate for a topic being unfamiliar to them
+  (real-world knowledge) - you are judging their language use, not their
+  general knowledge, as long as they communicate SOMETHING responsive.
+- Do not penalize British vs American vocabulary or spelling-adjacent word
+  choices (e.g. "flat" vs "apartment", "holiday" vs "vacation") - both are
+  acceptable; only flag it if usage is inconsistent/mixed in a way that
+  itself signals uncertainty rather than natural bidialectal fluency.
+- You are only given a text transcript here, never audio - so you have no
+  way to judge accent, and must not infer or penalize one from spelling or
+  word choice in the transcript.
 
 Return ONLY this JSON object, no explanation, no markdown:
 {{
@@ -2829,6 +3048,10 @@ async def evaluate_question_wise_audio(
     p2_acoustic_pron = _aggregate_acoustic_pronunciation(part_2_qas)
     p3_acoustic_pron = _aggregate_acoustic_pronunciation(part_3_qas)
 
+    p1_speech_timing = _aggregate_speech_timing(part_1_qas)
+    p2_speech_timing = _aggregate_speech_timing(part_2_qas)
+    p3_speech_timing = _aggregate_speech_timing(part_3_qas)
+
     # A part with zero real answer content means the candidate did not
     # attempt it at all - per the descriptor's own Band 0 definition
     # ("Does not attend / Does not complete the test"), that must score 0,
@@ -2851,9 +3074,9 @@ async def evaluate_question_wise_audio(
         asyncio.to_thread(generate_vocabulary, 1, p1_combined_transcripts) if p1_combined_transcripts else _immediate(VOCAB_FALLBACK_PART1),
         asyncio.to_thread(generate_vocabulary, 2, p2_combined_transcripts) if p2_combined_transcripts else _immediate(VOCAB_FALLBACK_PART2),
         asyncio.to_thread(generate_vocabulary, 3, p3_combined_transcripts) if p3_combined_transcripts else _immediate(VOCAB_FALLBACK_PART3),
-        asyncio.to_thread(generate_scores, 1, p1_feedback_text, part_1_qas_clean, p1_acoustic_pron) if p1_feedback_text else _immediate(dict(_default_scores)),
-        asyncio.to_thread(generate_scores, 2, p2_feedback_text, part_2_qas_clean, p2_acoustic_pron) if p2_feedback_text else _immediate(dict(_default_scores)),
-        asyncio.to_thread(generate_scores, 3, p3_feedback_text, part_3_qas_clean, p3_acoustic_pron) if p3_feedback_text else _immediate(dict(_default_scores)),
+        asyncio.to_thread(generate_scores, 1, p1_feedback_text, part_1_qas_clean, p1_acoustic_pron, p1_speech_timing) if p1_feedback_text else _immediate(dict(_default_scores)),
+        asyncio.to_thread(generate_scores, 2, p2_feedback_text, part_2_qas_clean, p2_acoustic_pron, p2_speech_timing) if p2_feedback_text else _immediate(dict(_default_scores)),
+        asyncio.to_thread(generate_scores, 3, p3_feedback_text, part_3_qas_clean, p3_acoustic_pron, p3_speech_timing) if p3_feedback_text else _immediate(dict(_default_scores)),
         asyncio.to_thread(generate_mistakes, 1, p1_feedback_text) if p1_feedback_text else _immediate({}),
         asyncio.to_thread(generate_mistakes, 2, p2_feedback_text) if p2_feedback_text else _immediate({}),
         asyncio.to_thread(generate_mistakes, 3, p3_feedback_text) if p3_feedback_text else _immediate({}),

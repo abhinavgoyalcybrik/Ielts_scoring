@@ -1,10 +1,15 @@
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils.audio_transcriber import _build_initial_prompt, _clean_transcript, _estimate_confidence
+
+
+def _segment(avg_logprob, no_speech_prob):
+    return SimpleNamespace(avg_logprob=avg_logprob, no_speech_prob=no_speech_prob)
 
 
 def test_build_initial_prompt_strips_newlines():
@@ -34,23 +39,23 @@ def test_clean_transcript_removes_repeated_words_and_punctuation_spacing():
 # ---------------------------------------------------------------------------
 
 def test_estimate_confidence_high_for_clear_audio():
-    result = {"segments": [{"avg_logprob": -0.1, "no_speech_prob": 0.02}, {"avg_logprob": -0.15, "no_speech_prob": 0.01}]}
-    confidence = _estimate_confidence(result, has_text=True)
+    segments = [_segment(-0.1, 0.02), _segment(-0.15, 0.01)]
+    confidence = _estimate_confidence(segments, has_text=True)
     assert confidence > 0.7
 
 
 def test_estimate_confidence_low_for_unclear_audio():
-    result = {"segments": [{"avg_logprob": -0.9, "no_speech_prob": 0.3}]}
-    confidence = _estimate_confidence(result, has_text=True)
+    segments = [_segment(-0.9, 0.3)]
+    confidence = _estimate_confidence(segments, has_text=True)
     assert confidence < 0.3
 
 
 def test_estimate_confidence_falls_back_without_segments():
-    assert _estimate_confidence({}, has_text=True) == 0.5
-    assert _estimate_confidence({}, has_text=False) == 0.0
+    assert _estimate_confidence([], has_text=True) == 0.5
+    assert _estimate_confidence([], has_text=False) == 0.0
 
 
 def test_estimate_confidence_bounded_between_zero_and_one():
-    extreme = {"segments": [{"avg_logprob": 5.0, "no_speech_prob": -5.0}]}
-    confidence = _estimate_confidence(extreme, has_text=True)
+    segments = [_segment(5.0, -5.0)]
+    confidence = _estimate_confidence(segments, has_text=True)
     assert 0.0 <= confidence <= 1.0

@@ -1,5 +1,7 @@
+import math
+
 # =========================
-# IELTS ACADEMIC READING 
+# IELTS ACADEMIC READING
 # =========================
 def band_from_correct(correct: int) -> float:
     if 39 <= correct <= 40:
@@ -112,4 +114,9 @@ def listening_band_from_correct(correct: int) -> float:
 # COMMON (WRITING / SPEAKING)
 # =========================
 def round_band(band: float) -> float:
-    return round(band * 2) / 2
+    """Official IELTS band rounding: an average ending in .25 rounds UP to
+    the next half band, and .75 rounds UP to the next whole band - i.e.
+    round-half-up on the doubled value. Python's built-in round() uses
+    round-half-to-even, which silently rounds .25/.75 averages DOWN roughly
+    half the time (e.g. round(6.25*2)/2 = 6.0, not the correct 6.5)."""
+    return math.floor(band * 2 + 0.5) / 2

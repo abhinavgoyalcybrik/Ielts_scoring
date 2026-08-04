@@ -10,7 +10,7 @@ Each part tests DIFFERENT speaking skills:
 
 EACH PART MUST RECEIVE UNIQUE, DIFFERENT EVALUATION.
 DO NOT copy scores or feedback from other parts.
-DO NOT output generic or identical responses.
+DO NOT output generic or identical responses across parts.
 
 CRITICAL INSTRUCTION:
 Your evaluation MUST be:
@@ -27,107 +27,204 @@ Transcript: {{transcript}}
 Audio Metrics: {{audio_metrics}}
 ================================
 
-IMPORTANT REMINDERS:
-- Part 1 answers are usually SHORT and DIRECT (personal facts)
-- Part 2 answers are LONGER and MORE FORMAL (topic presentation)
-- Part 3 answers are MORE ABSTRACT and DISCUSS OPINIONS (complex ideas)
-- Each part should have DIFFERENT fluency, vocabulary range, and complexity
-
-SCORING ACCURACY:
-- Most candidates cluster around Band 5–7 (NOT zeros)
-- Evaluate based on ACTUAL transcript content
-- Part 1: Often lower scores (5–6) due to shorter responses
-- Part 2: Usually middle scores (5–6) with more complexity
-- Part 3: Often higher scores (6–7) requiring sophisticated vocabulary
-- Subzero scores are ONLY valid if candidate is completely non-verbal
-- Default conservative score: 6 (B2 level) for any speaking response
-- If all scores are 0 → System will auto-correct to reasonable defaults
-
 INPUT ANALYSIS:
-- Read the transcript CAREFULLY  
+- Read the transcript CAREFULLY
 - Identify actual words and phrases the candidate used
 - Note strengths AND specific areas for improvement UNIQUE TO THIS PART
 - Extract different vocabulary from EACH part's transcript
 - DO NOT output generic or boilerplate feedback
 
-MANDATORY FIELDS (NEVER EMPTY):
-✓ fluency: 0-9 (number)
-✓ lexical: 0-9 (number)
-✓ grammar: 0-9 (number)
-✓ pronunciation: 0-9 (number)
-✓ wpm: 90-150 (number)
-✓ feedback.strengths: specific sentence (min 20 chars)
-✓ feedback.improvements: specific sentence (min 20 chars)
-✓ vocabulary_feedback.good_usage: 2-4 actual phrases (NEVER empty)
-✓ vocabulary_feedback.suggested_improvements: 2-3 alternatives (NEVER empty)
+--------------------------------------------------------
+OFFICIAL IELTS SPEAKING BAND DESCRIPTORS (0-9)
+--------------------------------------------------------
+Score EACH of the four criteria below independently, using ONLY the descriptor
+that best matches the transcript. There is NO default band and NO typical range
+per part — a response is scored on merit alone. A short, precise Part 1 answer
+can score 8-9; a weak, underdeveloped Part 3 answer can score 2-3. Do not nudge
+scores toward the middle of the scale; match the actual evidence in the
+transcript (and audio metrics, where present) to the band whose description it
+satisfies.
 
---------------------------------
-MANDATORY SCORING BANDS (0–9)
---------------------------------
+BAND 9
+- Fluency and coherence: Fluent with only very occasional repetition or
+  self-correction. Any hesitation that occurs is used only to prepare the
+  content of the next utterance and not to find words or grammar. Speech is
+  situationally appropriate and cohesive features are fully acceptable. Topic
+  development is fully coherent and appropriately extended.
+- Lexical resource: Total flexibility and precise use in all contexts.
+  Sustained use of accurate and idiomatic language.
+- Grammatical range and accuracy: Structures are precise and accurate at all
+  times, apart from mistakes characteristic of native speaker speech.
+- Pronunciation: Uses a full range of phonological features to convey precise
+  shades of meaning. Flexible use of features of connected speech is sustained
+  throughout. Can be effortlessly understood throughout. Accent has no effect
+  on intelligibility.
 
-FLUENCY: How smoothly and continuously the candidate speaks
-- 9: Effortless fluency, natural pacing, manages turn-taking well
-- 8: Fluent with rare hesitation; ideas well-connected
-- 7: Mostly fluent, occasional hesitation, generally coherent
-- 6: Mostly fluent with some repetition/self-correction, clear communication ← TYPICAL FOR PARTS 2-3
-- 5: Some hesitation but maintains communication; ideas present ← TYPICAL FOR PART 1
-- 4: Notable hesitation and slower pace
-- 3: Frequent long pauses; communication breaks down
-- Below 3: Severe breakdown (ONLY if non-verbal)
+BAND 8
+- Fluency and coherence: Fluent with only very occasional repetition or
+  self-correction; hesitation is usually content related and only rarely to
+  search for language. Topic development is coherent, appropriate and
+  relevant.
+- Lexical resource: Wide resource, readily and flexibly used to discuss all
+  topics and convey precise meaning.
+- Grammatical range and accuracy: Wide range of structures, flexibly used.
+  The majority of sentences are error-free.
+- Pronunciation: Uses a wide range of phonological features to convey precise
+  shades of meaning. Can sustain appropriate rhythm. Flexible use of stress
+  and intonation across long utterances, despite occasional lapses. Accent
+  has minimal effect on intelligibility.
 
-LEXICAL RESOURCE: Range and accuracy of vocabulary
-- 9: Wide range, precise, natural collocations
-- 8: Good range, sophisticated vocabulary, mostly accurate
-- 7: Good range, generally accurate
-- 6: Adequate range, mostly accurate, some repetition ← TYPICAL
-- 5: Limited range, frequent errors in word choice
-- 4: Basic vocabulary, frequent errors
-- Below 4: Very limited
+BAND 7
+- Fluency and coherence: Able to keep going and readily produce long turns
+  without noticeable effort. Some hesitation, repetition and/or
+  self-correction may occur, often mid-sentence, and indicate problems with
+  accessing appropriate language; however, these will not affect coherence.
+  Uses a range of connectives and discourse markers with some flexibility.
+- Lexical resource: Flexibly uses a wide resource to discuss a variety of
+  topics. Skilful use of less common and idiomatic vocabulary despite some
+  inaccuracies in word choice and collocation. Effective use of paraphrase as
+  required.
+- Grammatical range and accuracy: A range of structures flexibly used.
+  Error-free sentences are frequent. Both simple and complex sentences are
+  used effectively despite some errors. A few basic errors persist.
+- Pronunciation: Displays all the positive features of band 6 and some, but
+  not all, of the positive features of band 8.
 
-GRAMMAR: Complexity and accuracy of structures
-- 9: Consistent complex structures, rare errors
-- 8: Mostly accurate complex structures
-- 7: Mostly accurate, minor errors in complex forms
-- 6: Generally accurate, frequent errors in complex forms ← TYPICAL
-- 5: Mix of simple and complex, many errors
-- 4: Limited accuracy in both simple and complex
-- Below 4: Frequent errors throughout
+BAND 6
+- Fluency and coherence: Able to keep going and demonstrates a willingness to
+  produce long turns. Coherence may be lost at times due to hesitation,
+  repetition and/or self-correction. Uses a range of spoken discourse
+  markers, connectives and cohesive features though not always appropriately.
+- Lexical resource: Resource sufficient to discuss topics at length.
+  Vocabulary use may be inappropriate but the meaning is clear. Generally
+  able to paraphrase successfully.
+- Grammatical range and accuracy: Produces a mix of short and complex
+  sentence forms and a variety of structures with limited flexibility.
+  Though errors frequently occur in complex structures, these rarely impede
+  communication.
+- Pronunciation: Uses a range of phonological features, but control is
+  variable. Chunking is generally appropriate, but rhythm may be affected by
+  a lack of stress-timing and/or a rapid speech rate. Some effective use of
+  intonation and stress, but this is not sustained. Individual words or
+  phonemes may be mispronounced, but this causes only occasional lack of
+  clarity.
 
-PRONUNCIATION: Clarity and intelligibility
-- 9: Clear, natural stress/intonation, easy to understand
-- 8: Generally clear, mostly correct stress/intonation
-- 7: Generally clear, some stress/intonation difficulties
-- 6: Intelligible, generally acceptable pronunciation ← TYPICAL
-- 5: Generally intelligible, some words difficult to understand
-- 4: Some words difficult; occasional meaning unclear
-- Below 4: Often unintelligible
+BAND 5
+- Fluency and coherence: Usually able to keep going, but relies on repetition
+  and self-correction to do so and/or on slow speech. Hesitations are often
+  associated with mid-sentence searches for fairly basic lexis and grammar.
+  Overuse of certain discourse markers, connectives and other cohesive
+  features.
+- Lexical resource: Resource sufficient to discuss familiar and unfamiliar
+  topics but there is limited flexibility. Attempts paraphrase but not always
+  with success.
+- Grammatical range and accuracy: Basic sentence forms are fairly well
+  controlled for accuracy. Complex structures are attempted but these are
+  limited in range, nearly always contain errors and may lead to the need for
+  reformulation.
+- Pronunciation: Displays all the positive features of band 4 and some, but
+  not all, of the positive features of band 6.
+
+BAND 4
+- Fluency and coherence: Unable to keep going without noticeable pauses.
+  Speech may be slow with frequent repetition. Often self-corrects. Can link
+  simple sentences but often with repetitious use of connectives. Some
+  breakdowns in coherence.
+- Lexical resource: Resource sufficient for familiar topics but only basic
+  meaning can be conveyed on unfamiliar topics. Frequent inappropriacies and
+  errors in word choice. Rarely attempts paraphrase.
+- Grammatical range and accuracy: Can produce basic sentence forms and some
+  short utterances are error-free. Subordinate clauses are rare and, overall,
+  turns are short, structures are repetitive and errors are frequent.
+- Pronunciation: Uses some acceptable phonological features, but the range is
+  limited. Produces some acceptable chunking, but there are frequent lapses
+  in overall rhythm. Attempts to use intonation and stress, but control is
+  limited. Individual words or phonemes are frequently mispronounced, causing
+  lack of clarity. Understanding requires some effort and there may be
+  patches of speech that cannot be understood.
+
+BAND 3
+- Fluency and coherence: Frequent, sometimes long, pauses occur while the
+  candidate searches for words. Limited ability to link simple sentences and
+  go beyond simple responses to questions. Frequently unable to convey the
+  basic message.
+- Lexical resource: Resource limited to simple vocabulary used primarily to
+  convey personal information. Vocabulary inadequate for unfamiliar topics.
+- Grammatical range and accuracy: Basic sentence forms are attempted but
+  grammatical errors are numerous except in apparently memorised utterances.
+- Pronunciation: Displays some features of band 2 and some, but not all, of
+  the positive features of band 4.
+
+BAND 2
+- Fluency and coherence: Lengthy pauses before nearly every word. Isolated
+  words may be recognisable but speech is of virtually no communicative
+  significance.
+- Lexical resource: Very limited resource. Utterances consist of isolated
+  words or memorised utterances. Little communication possible without the
+  support of mime or gesture.
+- Grammatical range and accuracy: No evidence of basic sentence forms.
+- Pronunciation: Uses few acceptable phonological features (possibly because
+  the sample is insufficient). Overall problems with delivery impair attempts
+  at connected speech. Individual words and phonemes are mainly
+  mispronounced and little meaning is conveyed.
+
+BAND 1
+- Fluency and coherence: Essentially none. No communication possible. No
+  rateable language unless memorised.
+- Lexical resource: No resource bar a few isolated words.
+- Grammatical range and accuracy: No rateable language unless memorised.
+- Pronunciation: Can produce occasional individual words and phonemes that
+  are recognisable, but no overall meaning is conveyed. Unintelligible.
+
+BAND 0
+- Does not attend, or does not attempt the test in any way that can be
+  assessed (e.g. completely non-verbal transcript). Only use this if there is
+  genuinely no ratable speech.
 
 WPM (WORDS PER MINUTE):
-- Calculate if time provided: (word_count / time_seconds) * 60
-- If no time: estimate based on part:
-  - Part 1: 110-140 (quick personal answers)
-  - Part 2: 120-150 (extended monologue)
-  - Part 3: 100-140 (discussion with occasional overlap)
-- NEVER return 0 unless candidate spoke nothing
+- Calculate if time is provided: (word_count / time_seconds) * 60
+- If no time is provided, estimate from the transcript's pacing cues
+- Report the value you actually calculated/estimated — do not substitute a
+  fixed number. Only report 0 if the candidate produced no speech at all.
 
 --------------------------------
 FEEDBACK RULES (CRITICAL)
 --------------------------------
 
-strengths: Specific to THIS PART ONLY. Examples:
-- PART 1 GOOD: "The candidate answers clearly about their job and provides specific details about their daily routine."
-- PART 2 GOOD: "The speaker maintains a steady pace when describing the habit, showing coherence in presenting reasons and benefits."
-- PART 3 GOOD: "The candidate demonstrates critical thinking by discussing multiple perspectives on technology's impact on health."
+feedback.strengths: Specific to THIS PART ONLY, grounded in the descriptor
+that justifies the scores given. Examples:
+- PART 1 GOOD: "The candidate answers clearly about their job and provides
+  specific details about their daily routine."
+- PART 2 GOOD: "The speaker maintains a steady pace when describing the
+  habit, showing coherence in presenting reasons and benefits."
+- PART 3 GOOD: "The candidate demonstrates critical thinking by discussing
+  multiple perspectives on technology's impact on health."
 - BAD: "" (empty)
 - BAD: "The candidate speaks." (too generic)
 
-improvements: Specific, actionable, UNIQUE to THIS PART. Examples:
-- PART 1 GOOD: "Rather than using 'very' frequently, employ more varied intensifiers like 'quite', 'rather', or 'extremely'."
-- PART 2 GOOD: "Add more transitional phrases such as 'the main reason is...' or 'another benefit is...' to guide the listener."
-- PART 3 GOOD: "Expand answers with specific examples or recent trends to support your opinions and make them more convincing."
+feedback.improvements: Specific, actionable, UNIQUE to THIS PART, pointing at
+what would move the response to the next band. Examples:
+- PART 1 GOOD: "Rather than using 'very' frequently, employ more varied
+  intensifiers like 'quite', 'rather', or 'extremely'."
+- PART 2 GOOD: "Add more transitional phrases such as 'the main reason is...'
+  or 'another benefit is...' to guide the listener."
+- PART 3 GOOD: "Expand answers with specific examples or recent trends to
+  support your opinions and make them more convincing."
 - BAD: "" (empty)
 - BAD: "Improve fluency." (too vague)
 - BAD: "Reduce hesitation and improve continuity of speech." (boilerplate)
+
+mistakes.fluency / mistakes.grammar / mistakes.vocabulary /
+mistakes.pronunciation: 1-2 sentence specific critique for each criterion,
+grounded in the actual transcript (never empty, never boilerplate).
+
+DO NOT FLAG (CRITICAL - this is SPOKEN language, not writing): the
+transcript is what the candidate SAID, transcribed automatically - never
+critique punctuation, capitalization, or spelling in it. None of that was
+produced by the candidate; it is a transcription artifact, not a speaking
+error. Only flag issues a listener would actually notice when hearing the
+answer spoken aloud (tense, subject-verb agreement, word choice, article/
+preposition errors, word order, filler words, etc.).
 
 EXTRACT FROM TRANSCRIPT:
 - Find ACTUAL phrases the candidate used well
@@ -137,17 +234,21 @@ EXTRACT FROM TRANSCRIPT:
 Example Part 1:
 - Transcript: "I work in an office and sit at a desk all day"
   - good_usage: ["work in an office", "sit at a desk"]
-  - suggested_improvements: ["sit at a desk all day → remain seated at a desk for extended periods"]
+  - suggested_improvements: ["sit at a desk all day → remain seated at a desk
+    for extended periods"]
 
 Example Part 2:
-- Transcript: "I like reading books in my free time because books teach me a lot"
+- Transcript: "I like reading books in my free time because books teach me a
+  lot"
   - good_usage: ["in my free time", "books teach me"]
-  - suggested_improvements: ["books teach me → books provide valuable knowledge and insights"]
+  - suggested_improvements: ["books teach me → books provide valuable
+    knowledge and insights"]
 
 Example Part 3:
 - Transcript: "Technology is changing how people work and live"
   - good_usage: ["technology is changing", "how people work and live"]
-  - suggested_improvements: ["technology is changing → modern technology is fundamentally transforming"]
+  - suggested_improvements: ["technology is changing → modern technology is
+    fundamentally transforming"]
 
 --------------------------------
 VOCABULARY_FEEDBACK STRUCTURE (CRITICAL)
@@ -165,8 +266,10 @@ VOCABULARY_FEEDBACK STRUCTURE (CRITICAL)
 }
 
 RULES (STRICT ENFORCEMENT):
-- good_usage: MUST contain ACTUAL PHRASES from THIS PART's transcript (2-4 items minimum)
-- suggested_improvements: MUST be SPECIFIC alternatives with arrow → (2-3 items minimum)
+- good_usage: MUST contain ACTUAL PHRASES from THIS PART's transcript (2-4
+  items minimum)
+- suggested_improvements: MUST be SPECIFIC alternatives with arrow →
+  (2-3 items minimum)
 - NEVER return empty arrays
 - NEVER include random single words (must be phrases)
 - MUST be UNIQUE to this part (different from other parts)
@@ -178,32 +281,47 @@ VALIDATION:
 ✓ All items are from THIS part's transcript (not generic)
 
 --------------------------------
+VOCABULARY_TO_LEARN (3-6 words)
+--------------------------------
+
+Generate words relevant to the candidate's topic and speaking-appropriate
+(not academic writing-only). Each with a clear, brief meaning.
+
+Example format:
+{"word": "sedentary", "meaning": "describes an inactive lifestyle with
+little physical movement"}
+
+--------------------------------
 REQUIRED OUTPUT FORMAT (STRICT JSON)
 --------------------------------
 
+Return ONLY JSON for the requested part (part_1 OR part_2 OR part_3):
+- DO NOT return a full multi-part structure
+- DO NOT include other parts
+- DO NOT include overall_band
+- Return ONLY ONE object, in exactly this shape:
+
 {
-  "fluency": 0-9 (number, NEVER 0 unless non-verbal),
-  "lexical": 0-9 (number, NEVER 0 unless non-verbal),
-  "grammar": 0-9 (number, NEVER 0 unless non-verbal),
-  "pronunciation": 0-9 (number),
-  "wpm": number (90-150 for normal speech),
+  "fluency": 0-9 (number, matched to the descriptor table above),
+  "lexical": 0-9 (number, matched to the descriptor table above),
+  "grammar": 0-9 (number, matched to the descriptor table above),
+  "pronunciation": 0-9 (number, matched to the descriptor table above),
+  "wpm": number (actual calculated/estimated value, never a fixed default),
+  "feedback": {
+    "strengths": "specific sentence, min 20 chars, unique to this part",
+    "improvements": "specific sentence, min 20 chars, unique to this part"
+  },
   "mistakes": {
-    "fluency": "1-2 sentence specific critique of fluency issues in this response (NEVER empty)",
-    "grammar": "1-2 sentence specific critique of grammar issues found in the transcript (NEVER empty)",
-    "vocabulary": "1-2 sentence specific critique of vocabulary limitations in this response (NEVER empty)",
-    "pronunciation": "1-2 sentence specific guidance on pronunciation improvement (NEVER empty)"
+    "fluency": "1-2 sentence specific critique of fluency issues (NEVER empty)",
+    "grammar": "1-2 sentence specific critique of grammar issues (NEVER empty)",
+    "vocabulary": "1-2 sentence specific critique of vocabulary limitations (NEVER empty)",
+    "pronunciation": "1-2 sentence specific guidance on pronunciation (NEVER empty)"
   },
   "improvement": "One clear, actionable improvement tip for this part specifically (min 30 chars)",
   "band9_answer": "Write a complete Band 9 model answer to the question(s) in {{questions}} — at least 3 sentences, natural, sophisticated vocabulary, no filler words",
   "vocabulary_feedback": {
-    "good_usage": [
-      "phrase from transcript showing good usage",
-      "another phrase from transcript"
-    ],
-    "suggested_improvements": [
-      "phrase from transcript → better alternative",
-      "another suggestion from transcript"
-    ]
+    "good_usage": ["phrase from transcript showing good usage", "another phrase from transcript"],
+    "suggested_improvements": ["phrase from transcript → better alternative", "another suggestion from transcript"]
   },
   "vocabulary_to_learn": [
     {"word": "sophisticated word relevant to this part's topic", "meaning": "clear, brief definition"}
@@ -211,217 +329,30 @@ REQUIRED OUTPUT FORMAT (STRICT JSON)
 }
 
 CRITICAL VALIDATION CHECKLIST (BEFORE OUTPUTTING):
-✓ fluency is 5-7 range (realistic)
-✓ All scores are NOT zero (unless genuinely non-verbal)
+✓ Each of fluency/lexical/grammar/pronunciation is justified by the specific
+  band descriptor it matches — not defaulted or anchored to a typical range
 ✓ mistakes.fluency/grammar/vocabulary/pronunciation are NOT empty (min 20 chars each)
 ✓ improvement is NOT empty, NOT generic (SPECIFIC to this part)
 ✓ band9_answer is a complete model answer (min 3 sentences, sophisticated vocabulary)
 ✓ vocabulary_feedback.good_usage has 2-4 items with SPACES (are phrases)
 ✓ vocabulary_feedback.suggested_improvements has 2-3 items with " → " notation
 ✓ vocabulary_to_learn has 3-6 items, each with word and meaning
-✓ WPM is 90-150 (reasonable speaking rate)
+✓ WPM reflects the actual transcript/timing, not a placeholder
 ✓ JSON is valid and complete
 ✓ No null values or empty strings in required fields
 ✓ This part's evaluation is DIFFERENT from other parts
 
 If ANY field fails validation → STOP and REGENERATE that field.
 
-PART DIFFERENTIATION CHECKLIST:
-- Part 1: Usually 5-5.5 fluency (short answers, less flow) | 5-6 lexical | 5-6 grammar
-- Part 2: Usually 5.5-6 fluency (longer, more flow) | 5.5-6.5 lexical | 5.5-6.5 grammar
-- Part 3: Usually 6-6.5 fluency (sophisticated discussion) | 6-7 lexical | 6-7 grammar
-
-Output scores DIFFERENTLY for each part based on transcript length and complexity.
-
 --------------------------------
 FINAL INSTRUCTION
 --------------------------------
 
-Output ONLY valid JSON.
-Never output incomplete responses.
+Output ONLY valid JSON. One object. No wrapper.
+Never output incomplete responses. Never stop mid-output. Never return
+partial data.
 Never output generic or identical feedback across parts.
 Never output empty arrays or fields.
-Quality > Speed.
-Accuracy > Generosity.
-Each part must be UNIQUE and DIFFERENT.
-
-FLUENCY: How smoothly and continuously the candidate speaks
-- 9: Effortless fluency, natural pacing, manages turn-taking well
-- 8: Fluent with rare hesitation; ideas well-connected
-- 7: Mostly fluent, occasional hesitation, generally coherent
-- 6: Mostly fluent with some repetition/self-correction, clear communication ← DEFAULT
-- 5: Some hesitation but maintains communication; ideas present
-- 4: Notable hesitation and slower pace
-- 3: Frequent long pauses; communication breaks down
-- Below 3: Severe breakdown (ONLY if non-verbal)
-
-LEXICAL RESOURCE: Range and accuracy of vocabulary
-- 9: Wide range, precise, natural collocations
-- 8: Good range, sophisticated vocabulary, mostly accurate
-- 7: Good range, generally accurate
-- 6: Adequate range, mostly accurate, some repetition ← DEFAULT
-- 5: Limited range, frequent errors in word choice
-- 4: Basic vocabulary, frequent errors
-- Below 4: Very limited
-
-GRAMMAR: Complexity and accuracy of structures
-- 9: Consistent complex structures, rare errors
-- 8: Mostly accurate complex structures
-- 7: Mostly accurate, minor errors in complex forms
-- 6: Generally accurate, frequent errors in complex forms ← DEFAULT
-- 5: Mix of simple and complex, many errors
-- 4: Limited accuracy in both simple and complex
-- Below 4: Frequent errors throughout
-
-PRONUNCIATION: Clarity and intelligibility
-- 9: Clear, natural stress/intonation, easy to understand
-- 8: Generally clear, mostly correct stress/intonation
-- 7: Generally clear, some stress/intonation difficulties
-- 6: Intelligible, generally acceptable pronunciation ← DEFAULT
-- 5: Generally intelligible, some words difficult to understand
-- 4: Some words difficult; occasional meaning unclear
-- Below 4: Often unintelligible
-
-WPM (WORDS PER MINUTE):
-- Calculate if time provided: (word_count / time_seconds) * 60
-- If no time: estimate 110–140 based on fluency level
-- NEVER return 0 unless candidate spoke nothing
-
---------------------------------
-FEEDBACK RULES (CRITICAL)
---------------------------------
-
-strengths: Specific, contextual observations. Examples:
-- GOOD: "The candidate speaks with a steady pace and clearly explains their daily routine with concrete examples."
-- BAD: "" (empty)
-- BAD: "The candidate speaks." (too generic)
-
-improvements: Specific, actionable guidance. Examples:
-- GOOD: "To improve, use more varied vocabulary such as 'subsequently' instead of 'then', and add linking phrases like 'moreover' to connect ideas."
-- BAD: "" (empty)
-- BAD: "Improve fluency." (too vague)
-- BAD: "Reduce hesitation and improve continuity of speech to enhance fluency." (boilerplate)
-
-EXTRACT FROM TRANSCRIPT:
-- Find actual phrases the candidate used well
-- Identify areas where better vocabulary would help
-- Provide specific alternatives
-
-Example from transcript: "I work in an office and sit at a desk all day"
-- good_usage: ["work in an office", "sit at a desk"]
-- suggested_improvements: ["sit at a desk all day → remain seated at a desk for extended periods"]
-
---------------------------------
-VOCABULARY_FEEDBACK STRUCTURE
---------------------------------
-
-"vocabulary_feedback": {
-  "good_usage": [
-    "exact phrase from transcript demonstrating correct usage",
-    "another phrase showing competent vocabulary"
-  ],
-  "suggested_improvements": [
-    "candidate's phrase → more advanced alternative",
-    "another improvement"
-  ]
-}
-
-RULES:
-- good_usage: MUST contain ACTUAL PHRASES from the transcript
-- suggested_improvements: MUST be SPECIFIC alternatives (not generic advice)
-- NEVER return empty arrays
-- NEVER include random single words
-- MUST be relevant to the candidate's actual speech
-
---------------------------------
-VOCABULARY_TO_LEARN (10–15 words)
---------------------------------
-
-Generate words relevant to the candidate's topic.
-Include practical usage hints for SPEAKING.
-
-Example format:
-{
-  "word": "sedentary",
-  "usage_hint": "describe an inactive lifestyle when discussing exercise"
-}
-
-REQUIREMENTS:
-- 10–15 words (not fewer)
-- Speaking-appropriate (NOT academic writing-only)
-- Relevant to candidate's topics
-- Each with short, practical usage hint
-- NEVER empty list
-
---------------------------------
-REQUIRED OUTPUT FORMAT (STRICT JSON)
---------------------------------
-
-{
-  "fluency": 0-9 (number, not text),
-  "lexical": 0-9 (number),
-  "grammar": 0-9 (number),
-  "pronunciation": 0-9 (number),
-  "wpm": number (110-140 typical range),
-  "feedback": {
-    "strengths": "specific contextual observation",
-    "improvements": "specific, actionable guidance"
-  },
-  "vocabulary_feedback": {
-    "good_usage": ["phrase from transcript", "another phrase"],
-    "suggested_improvements": ["phrase → better alternative"]
-  }
-}
-
-CRITICAL VALIDATION CHECKLIST:
-Before finalizing response:
-✓ All scores are NOT zero (unless non-verbal)
-✓ feedback.strengths is NOT empty and NOT generic
-✓ feedback.improvements is NOT boilerplate
-✓ vocabulary_feedback.good_usage contains ACTUAL transcript phrases (not random words)
-✓ vocabulary_feedback.suggested_improvements contains SPECIFIC alternatives (not generic advice)
-✓ All arrays are populated (never empty)
-✓ WPM is reasonable (90–150 for normal speakers)
-✓ JSON is valid and complete
-✓ No null values
-✓ No empty strings in required fields
-
-If any field fails validation → STOP and REGENERATE that field.
-
---------------------------------
-FINAL INSTRUCTION
---------------------------------
-
-Output ONLY valid JSON.
-Never output incomplete responses.
-Never output generic feedback.
-Quality > Speed.
-Accuracy > Generosity.
-- Apply IELTS rounding (nearest 0.5).
-- If most scores cluster at same level → do NOT undercut.
-
---------------------------------
-HARD AUTO-COMPLETE & FAIL-SAFE
---------------------------------
-
-9) BEFORE OUTPUTTING RESPONSE:
-Perform this checklist internally:
-
-- fluency, lexical, grammar, pronunciation, wpm exist
-- mistakes has all 4 keys (fluency, grammar, vocabulary, pronunciation)
-- improvement is non-empty and specific
-- band9_answer is a complete model answer (not a placeholder)
-- vocabulary_feedback (both arrays) exist
-- vocabulary_to_learn has 3-6 items with word + meaning
-- JSON is fully closed
-
-IF ANY ITEM IS MISSING:
-→ AUTO-FILL conservatively
-→ DO NOT stop output early
-→ DO NOT return partial JSON
-
-FINAL INSTRUCTIONS:
-- Output JSON ONLY. One object. No wrapper.
-- Never stop mid-output.
-- Never return partial data.
-- Apply all auto-fixes silently.
+Quality > Speed. Accuracy > Generosity.
+Score strictly against the official band descriptors above — do not inflate
+or deflate toward a "typical" band.

@@ -1031,6 +1031,25 @@ def check_relevance(question: str, answer: str) -> float:
     return len(common) / len(q_words) if q_words else 1.0
 
 
+_NEGATION_WORDS = {"no", "not", "without", "never", "hardly", "barely", "isn't", "wasn't", "doesn't", "didn't"}
+
+
+def _feedback_mentions(text: str, keywords: list) -> bool:
+    """Check whether any keyword/phrase appears as a genuine signal in
+    feedback text - not merely as a substring of another word, and not
+    negated. Plain `kw in text` matches "clear" inside "unclear"; this uses
+    word-boundary matching to avoid that, and additionally skips matches
+    immediately preceded by a negation word (e.g. "no hesitation" should not
+    count as a hesitation signal)."""
+    for kw in keywords:
+        for match in re.finditer(r'\b' + re.escape(kw) + r'\b', text):
+            preceding_words = text[:match.start()].strip().split()
+            if preceding_words and preceding_words[-1] in _NEGATION_WORDS:
+                continue
+            return True
+    return False
+
+
 def evaluate_speaking_part(part, transcript, audio_metrics, time_seconds=None, debug: bool = False):
     """Evaluate a single speaking part and return formatted result"""
     part_start = time.time()
@@ -1225,11 +1244,11 @@ IMPORTANT:
     
     # Keywords indicating high fluency in feedback
     high_fluency_keywords = ["clear", "logical", "communicates ideas", "maintains flow", "continuous", "well-organized", "coherent"]
-    feedback_suggests_high_fluency = any(kw in feedback_combined for kw in high_fluency_keywords)
-    
+    feedback_suggests_high_fluency = _feedback_mentions(feedback_combined, high_fluency_keywords)
+
     # Keywords indicating low fluency in feedback
     low_fluency_keywords = ["breakdown", "hesitation", "unable to continue", "disjointed", "fragmented", "frequently pauses"]
-    feedback_suggests_low_fluency = any(kw in feedback_combined for kw in low_fluency_keywords)
+    feedback_suggests_low_fluency = _feedback_mentions(feedback_combined, low_fluency_keywords)
     
     if feedback_suggests_high_fluency and fluency_final < 5:
         print(f"[AUTO-FIX RULE 2] Part {part}: Feedback suggests high fluency but score is {fluency_final}. Correcting to 5.")
@@ -1253,9 +1272,11 @@ IMPORTANT:
         else:
             result["wpm"] = 0
 
-    # Ensure WPM is never 0 unless no transcript
+    # If WPM couldn't be measured (e.g. timing data was missing/invalid) but
+    # there IS a transcript, don't fabricate a plausible-looking number -
+    # flag it so downstream consumers know this wasn't a real measurement.
     if result["wpm"] == 0 and transcript and len(transcript.strip()) > 0:
-        result["wpm"] = 120
+        result["wpm_estimated"] = True
 
     # ============================================
     # VALIDATE VOCABULARY_FEEDBACK (Rule 5)
@@ -1956,8 +1977,12 @@ def evaluate_speaking(data: dict):
         weighted_overall = apply_ielts_part_weighting(part_scores)
         results["overall_band"] = round_band(weighted_overall)
         
-        # EMERGENCY VALIDATION: If overall_band is suspiciously low (< 1.5) but we have transcripts, it's wrong
-        if results["overall_band"] < 1.5 and any(p.get("transcript", "") for p in parts_evaluated):
+        # EMERGENCY VALIDATION: If overall_band is suspiciously low (< 1.5), it's
+        # wrong - we're inside `if parts_evaluated:`, so real parts were already
+        # evaluated (this used to check `p.get("transcript", "")`, but the part
+        # result dicts never carry a "transcript" key, so that check was always
+        # False and this safety net never fired).
+        if results["overall_band"] < 1.5:
             print(f"[EMERGENCY AUTO-CORRECT] Overall band {results['overall_band']} is too low for evaluated transcripts. Using minimum 4.5.")
             results["overall_band"] = 4.5
         
@@ -2038,9 +2063,13 @@ def evaluate_speaking(data: dict):
                 if score_key not in part or not isinstance(part.get(score_key), (int, float)):
                     part[score_key] = 5
             
-            # Ensure WPM is set
-            if "wpm" not in part or part.get("wpm", 0) == 0:
-                part["wpm"] = 120
+            # Ensure WPM is present, but don't fabricate a plausible-looking
+            # number when it genuinely couldn't be measured - flag it instead
+            # so downstream consumers know this wasn't a real measurement.
+            if "wpm" not in part:
+                part["wpm"] = 0
+            if part.get("wpm", 0) == 0:
+                part["wpm_estimated"] = True
             
             # Ensure feedback is complete and non-empty
             if "feedback" not in part:
