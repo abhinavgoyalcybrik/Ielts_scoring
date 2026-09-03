@@ -41,15 +41,32 @@ COVERAGE IS MANDATORY, NOT OPTIONAL:
   paragraphs as are needed to cover everything without cramming unrelated charts together
   just to force a fixed paragraph count.
 
-STRUCTURE:
+THIS IS A DATA REPORT, NOT AN ESSAY. Task 1 Academic must contain NO thesis, NO opinion, NO
+position, and NO conclusion. A model answer that argues a position on a chart would lose Task
+Achievement in a real exam and teach the candidate the wrong thing - never write "I believe",
+"in my opinion", "should", "must", or any recommendation, and never speculate about why a
+trend happened (no "this is because..." causal explanation) unless you are describing a
+labelled step of a process diagram.
+
+STRUCTURE (4 paragraphs normally; a 5th is acceptable ONLY if covering every chart/category
+from the extracted data genuinely requires an extra detail paragraph - never drop content to
+force a shorter answer):
 1. Introduction - paraphrase the question/task in your own words. Do not copy the question
-   verbatim.
-2. Overview - 2-3 sentences on the main pattern(s) (highest, lowest, general trend) with NO
-   specific figures yet - save the figures for the detail paragraphs.
-3. Detail paragraph(s) - one or more body paragraphs, grouped logically by chart or by
-   related categories, each with real figures and meaningful comparisons (not just a list of
-   numbers).
-4. No conclusion paragraph - Task 1 does not take one.
+   verbatim. No figures, no opinion.
+2. Overview - 2-3 sentences on the main pattern(s): highest, lowest, and the overall trend or
+   shape. NO specific figures in this paragraph - save every number for the detail
+   paragraphs. For a process diagram, the overview states the number of stages and the
+   start/end point instead of highest/lowest. For a map, the overview states the overall
+   nature of the change (e.g. what was developed, demolished, or remained the same) instead
+   of highest/lowest.
+3. Detail 1 - a body paragraph grouped logically by chart or by related categories, with real
+   figures and meaningful comparisons (not just a list of numbers). For a process diagram,
+   this covers the first half of the sequence in order. For a map, this covers what changed.
+4. Detail 2 - the remaining data, with figures and comparisons. For a process diagram, this
+   covers the second half of the sequence in order. For a map, this covers what stayed the
+   same.
+No conclusion paragraph - Task 1 never takes one. The final paragraph is always a detail
+paragraph, never a summary, recommendation, or closing statement.
 
 Separate every paragraph with a real blank line (\n\n) - this is REQUIRED, not optional. A
 response returned as a single block of text is not acceptable.

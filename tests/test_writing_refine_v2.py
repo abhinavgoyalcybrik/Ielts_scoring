@@ -265,9 +265,24 @@ def _task2_call_sequence(monkeypatch, responses):
     return calls
 
 
+# A Task 2 answer that satisfies the structure-enforcement checks added by
+# the "Band 9 structure per task variant" plan (stated position in the
+# intro, restated position in the conclusion, no addition-connective
+# introducing a new idea) - used wherever a test needs "good" output that
+# must actually pass validation, not just have >=4 paragraphs.
+def _good_task2_structured_answer(pad_words: int = 0) -> str:
+    pad = (" Extra detail sentence padding the word count further along." * pad_words) if pad_words else ""
+    return "\n\n".join([
+        "I believe that governments should invest more in public health campaigns nationwide." + pad,
+        "Firstly, prevention reduces long-term healthcare costs, since treating illness early is far cheaper than treating it once it becomes severe." + pad,
+        "Secondly, informed citizens make healthier choices, since well-designed campaigns give people practical steps they can act on immediately." + pad,
+        "In conclusion, I believe stronger investment in public health campaigns is worthwhile, since it reduces costs and helps citizens make healthier choices." + pad,
+    ])
+
+
 def test_generate_refine_v2_passes_on_first_attempt(monkeypatch):
     good = {
-        "refined_answer": "\n\n".join(["Paragraph with enough content here."] * 4),
+        "refined_answer": _good_task2_structured_answer(),
         "rewrite_basis": "candidate_material",
         "vocabulary_suggestions": [],
     }
@@ -285,7 +300,7 @@ def test_generate_refine_v2_passes_on_first_attempt(monkeypatch):
 def test_generate_refine_v2_retries_once_with_named_issues_then_passes(monkeypatch):
     bad = {"refined_answer": "Only one paragraph, not enough of them here at all really.", "vocabulary_suggestions": []}
     good = {
-        "refined_answer": "\n\n".join(["Paragraph with enough content here."] * 4),
+        "refined_answer": _good_task2_structured_answer(),
         "rewrite_basis": "candidate_material",
         "vocabulary_suggestions": [],
     }
@@ -326,7 +341,7 @@ def test_generate_refine_v2_two_failures_reports_issues_not_silent(monkeypatch):
 
 def test_generate_refine_v2_keeps_longer_text_when_still_over_budget_after_retry(monkeypatch):
     over_budget = {
-        "refined_answer": "\n\n".join(["word " * 100] * 4),
+        "refined_answer": _good_task2_structured_answer(pad_words=20),
         "vocabulary_suggestions": [],
     }
     calls = _task2_call_sequence(monkeypatch, [over_budget, over_budget])
@@ -411,7 +426,7 @@ def test_evaluate_writing_flag_on_wires_v2_pipeline_end_to_end(monkeypatch):
     monkeypatch.setattr(writing, "call_gpt_text", fail_if_called)
 
     refine_response = {
-        "refined_answer": "\n\n".join(["Paragraph with real content here for this test."] * 4),
+        "refined_answer": _good_task2_structured_answer(),
         "vocabulary_suggestions": [
             {"original_phrase": "invest in public health", "stronger_alternative": "channel resources into public health", "placement_context": "opening sentence"}
         ],

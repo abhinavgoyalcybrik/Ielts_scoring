@@ -260,6 +260,75 @@ def _detect_task1_variant(question: str, essay: str) -> str:
     return "academic"
 
 
+# ---------------------------------------------------------------------------
+# Task 2 question-type detection (approved "Band 9 structure per task
+# variant" plan). No production detector existed before this - the eval
+# harness's question_bank.py has a `t2_variant` field on each question, but
+# it's a hand-assigned label on static test data, never computed from
+# question text (confirmed by grep: nothing calls anything to derive it).
+# This is the smallest deterministic heuristic that covers the 5 IELTS
+# Task 2 types, in the same keyword-pattern style as _detect_task1_variant
+# above. Validated against all 10 of the harness's own labelled Task 2
+# questions: 9/10 correct. The one miss is real, not a bug - PROBLEM/
+# SOLUTION and TWO-PART are genuinely hard to separate from wording alone
+# (the harness's own "two_part" food-waste question - "what are the causes
+# of this problem, and what measures could be taken" - is phrased
+# identically to its "problem_solution" examples), and the two use
+# near-identical structures in the approved template spec anyway, so
+# problem_solution is the detection winner whenever problem/solution/cause
+# language is present, and two_part is only reached as an explicit
+# fallback for a genuine two-question pattern that doesn't use that
+# language. Order matters: opinion and discussion have the most
+# unambiguous wording, checked first; advantages/disadvantages next (also
+# distinctive); problem_solution before the two_part fallback, since most
+# real two-question Task 2 prompts ARE problem/solution or causes/effects
+# in practice.
+# ---------------------------------------------------------------------------
+_T2_OPINION_PATTERN = re.compile(
+    r"to what extent do you agree or disagree|do you agree or disagree", re.IGNORECASE
+)
+_T2_DISCUSSION_PATTERN = re.compile(
+    r"discuss both (?:these |the )?views", re.IGNORECASE
+)
+_T2_ADV_DIS_PATTERN = re.compile(
+    r"advantages?\b.{0,60}\bdisadvantages?\b|disadvantages?\b.{0,60}\badvantages?\b|"
+    r"outweighs? the (?:advantages|disadvantages|benefits|drawbacks)",
+    re.IGNORECASE,
+)
+_T2_PROBLEM_SOLUTION_PATTERN = re.compile(
+    r"\bproblems?\b.{0,80}\b(?:solutions?|measures?|address|be done|solve)\b|"
+    r"\bcauses?\b.{0,80}\b(?:solutions?|measures?|address|be done|solve)\b|"
+    r"what (?:problems|causes)\b",
+    re.IGNORECASE,
+)
+_T2_TWO_PART_FALLBACK_PATTERN = re.compile(
+    r"\?.*\?|\bwhy\b.{0,80}\band\b.{0,40}\bwhat\b", re.IGNORECASE | re.DOTALL
+)
+
+TASK2_QUESTION_TYPES = (
+    "opinion", "discussion", "advantages_disadvantages", "problem_solution", "two_part",
+)
+
+
+def _detect_task2_question_type(question: str) -> str:
+    """Returns one of TASK2_QUESTION_TYPES. Defaults to "opinion" - the
+    most common real Task 2 type and the most broadly-applicable generic
+    structure - when nothing matches, rather than guessing among the more
+    specific templates."""
+    q = question or ""
+    if _T2_OPINION_PATTERN.search(q):
+        return "opinion"
+    if _T2_DISCUSSION_PATTERN.search(q):
+        return "discussion"
+    if _T2_ADV_DIS_PATTERN.search(q):
+        return "advantages_disadvantages"
+    if _T2_PROBLEM_SOLUTION_PATTERN.search(q):
+        return "problem_solution"
+    if _T2_TWO_PART_FALLBACK_PATTERN.search(q):
+        return "two_part"
+    return "opinion"
+
+
 def clamp(score):
     try:
         return max(0.0, min(9.0, float(score)))
@@ -365,6 +434,14 @@ def _split_sentences(text: str) -> list[str]:
     if not text:
         return []
     return [part.strip() for part in re.split(r'(?<=[.!?])\s+|\n+', str(text)) if part and part.strip()]
+
+
+def _split_paragraphs(text: str) -> list[str]:
+    """Same blank-line-separated split used inline in several places in
+    this file (refine validation, the legacy refine caller) - factored
+    here once new structure-validation checks need it in several more
+    places."""
+    return [b.strip() for b in re.split(r'\n\s*\n', text or "") if b.strip()]
 
 
 def _normalize_mistake_severity_and_category(mistakes: list) -> list:
@@ -949,6 +1026,57 @@ _PARTIALLY_OFF_TOPIC_INSTRUCTIONS = (
 )
 
 
+# Approved "Band 9 structure per task variant" plan: Task 2's structure
+# genuinely varies by question type (unlike Task 1, which has one report
+# structure regardless of chart type) - one generic "intro/body/body/
+# conclusion" instruction taught the wrong shape to 4 of the 5 real IELTS
+# Task 2 types. Selected by _detect_task2_question_type() and interpolated
+# into writing_refine_task2.txt's <<<STRUCTURE_TEMPLATE>>> placeholder.
+# Every body paragraph, all types: main idea -> explanation -> example ->
+# implication - that shared instruction lives once in the template file
+# itself, not repeated in each block below.
+_TASK2_STRUCTURE_TEMPLATES = {
+    "opinion": (
+        "OPINION (agree/disagree):\n"
+        "1. Introduction - paraphrase the question, then state your position clearly and directly.\n"
+        "2. Body 1 - your first reason supporting your position, fully developed.\n"
+        "3. Body 2 - your second reason, fully developed.\n"
+        "4. Conclusion - restate your position and summarise your reasons. No new idea here."
+    ),
+    "discussion": (
+        "DISCUSSION (discuss both views and give your own opinion):\n"
+        "1. Introduction - paraphrase the question, indicate that both views will be discussed, and state "
+        "your own position.\n"
+        "2. Body 1 - the first view, explained fairly on its own terms (not as a strawman to knock down).\n"
+        "3. Body 2 - the second view, plus your own position and why you hold it.\n"
+        "4. Conclusion - restate your position. No new idea here."
+    ),
+    "advantages_disadvantages": (
+        "ADVANTAGES/DISADVANTAGES:\n"
+        "1. Introduction - paraphrase the question, and if it asks whether one outweighs the other, indicate "
+        "your view on that.\n"
+        "2. Body 1 - the advantages, developed.\n"
+        "3. Body 2 - the disadvantages, developed.\n"
+        "4. Conclusion - state which outweighs and why. No new idea here."
+    ),
+    "problem_solution": (
+        "PROBLEM/SOLUTION (or causes/effects):\n"
+        "1. Introduction - paraphrase the question and signpost that you will cover both the problems/causes "
+        "and the solutions.\n"
+        "2. Body 1 - the problems or causes, developed.\n"
+        "3. Body 2 - solutions that address THOSE SPECIFIC problems from Body 1, not generic solutions.\n"
+        "4. Conclusion - summarise. No new idea here."
+    ),
+    "two_part": (
+        "TWO-PART QUESTION:\n"
+        "1. Introduction - paraphrase the question and signpost that you will answer both parts.\n"
+        "2. Body 1 - answers part one directly.\n"
+        "3. Body 2 - answers part two directly.\n"
+        "4. Conclusion - a brief answer to both parts. No new idea here."
+    ),
+}
+
+
 def _build_refine_prompt_v2(
     task_type: str,
     task1_variant,
@@ -961,6 +1089,7 @@ def _build_refine_prompt_v2(
     word_max: int,
     retry_issues=None,
     relevance_status: str = "on_topic",
+    task2_question_type: str = "opinion",
 ) -> str:
     """Loads the right template and fills placeholders. Picks the template
     by task type/variant: the chart-report template
@@ -1039,6 +1168,9 @@ def _build_refine_prompt_v2(
     if "<<<REQUIRED_CATEGORIES>>>" in filled:
         req_text = "\n".join(f"- {p}" for p in required_points) if required_points else "(none identified)"
         filled = filled.replace("<<<REQUIRED_CATEGORIES>>>", req_text)
+    if "<<<STRUCTURE_TEMPLATE>>>" in filled:
+        structure_text = _TASK2_STRUCTURE_TEMPLATES.get(task2_question_type, _TASK2_STRUCTURE_TEMPLATES["opinion"])
+        filled = filled.replace("<<<STRUCTURE_TEMPLATE>>>", structure_text)
     return filled
 
 
@@ -1078,6 +1210,70 @@ def _content_word_overlap_ratio(text_a: str, text_b: str) -> float:
     return len(words_a & words_b) / len(words_a)
 
 
+# ---------------------------------------------------------------------------
+# Structure enforcement (approved "Band 9 structure per task variant" plan).
+# Task 1 Academic is a data report - no thesis, no opinion, no conclusion.
+# A structure template that reduced coverage would be a regression, so
+# these checks are additive to (never a replacement for) the coverage
+# checks in _validate_refine_output above/below.
+# ---------------------------------------------------------------------------
+_TASK1_CONCLUSION_MARKERS = re.compile(
+    r"^\s*(in conclusion|to conclude|in summary|to summarize|to summarise)\b",
+    re.IGNORECASE,
+)
+_TASK1_OPINION_MARKERS = re.compile(
+    r"\bi (?:think|believe|feel)\b|\bin my opinion\b|\bi would (?:recommend|suggest|argue)\b|"
+    r"\bshould\b|\bmust\b|\bought to\b",
+    re.IGNORECASE,
+)
+_TASK2_POSITION_MARKERS = re.compile(
+    r"\bi (?:strongly |firmly |personally )?(?:believe|think|feel|agree|disagree|argue|contend)\b|"
+    r"\bin my (?:opinion|view|belief)\b|"
+    r"\b(?:this essay|this response)\b.{0,30}\b(?:will|argues?|contends?|discusses?|examines?|explores?)\b|"
+    r"outweighs? the (?:advantages|disadvantages|benefits|drawbacks)",
+    re.IGNORECASE,
+)
+_TASK2_CONCLUSION_TRANSITION = re.compile(
+    r"^\s*(in conclusion|to conclude|overall|in summary|to summarize|to summarise|on balance)\b",
+    re.IGNORECASE,
+)
+# A genuine "new idea in the conclusion" almost always announces itself with
+# an addition connective - this targets that known failure pattern directly
+# rather than a fuzzy content-word-overlap ratio, which would also flag
+# ordinary Band 9 paraphrase/synonym variation between body and conclusion
+# (deliberately varying vocabulary is itself a scored Lexical Resource
+# trait, not a defect) as a false positive.
+_TASK2_NEW_IDEA_CONNECTIVES = re.compile(
+    r"\b(furthermore|in addition(?:,| to this)?|additionally|moreover|"
+    r"another (?:reason|point|factor|advantage|disadvantage|argument) (?:is|would be)|"
+    r"it (?:is|should be) also (?:worth noting|worth mentioning|noted) that|"
+    r"one (?:more|further) (?:point|reason) (?:is|worth mentioning))\b",
+    re.IGNORECASE,
+)
+
+
+def _task2_states_position(paragraph: str) -> bool:
+    return bool(_TASK2_POSITION_MARKERS.search(paragraph or ""))
+
+
+# A live-measured false positive: an Academic Task 1 overview describing a
+# chart with a date range ("...over the five-year period... by 2020")
+# unavoidably mentions a calendar year, which is not a "figure" in the
+# sense this check means (a reported data value) - it's part of describing
+# the chart's own timeframe, and stripping it is impossible without
+# breaking the sentence. Confirmed live: every one of 5/5 real n=5 runs on
+# a genuine 2015-2020 bar chart failed this check on both attempts before
+# this fix, because the year could never be removed. Strips bare 4-digit
+# year-shaped tokens (1000-2999) before the figures check runs, so a
+# genuine data value (which always appears with a unit, a %, or as a
+# smaller/differently-shaped number) still gets caught.
+_YEAR_MENTION_PATTERN = re.compile(r'\b[12]\d{3}\b')
+
+
+def _strip_year_mentions(text: str) -> str:
+    return _YEAR_MENTION_PATTERN.sub('', text or "")
+
+
 def _validate_refine_output(
     parsed,
     extracted_data,
@@ -1089,6 +1285,7 @@ def _validate_refine_output(
     word_min: int,
     word_max: int,
     relevance_status: str = "on_topic",
+    task2_question_type: str = "opinion",
 ) -> list:
     """ONE unified list of everything wrong with a generated refine
     response, so a single retry can name every problem at once rather than
@@ -1129,7 +1326,7 @@ def _validate_refine_output(
             "(data_contradiction_flag=true)"
         )
 
-    blocks = [b for b in re.split(r'\n\s*\n', refined) if b.strip()]
+    blocks = _split_paragraphs(refined)
     if task_type == "task_2" and len(blocks) < 4:
         issues.append(
             f"only {len(blocks)} paragraph(s) - Task 2 needs a minimum of 4 "
@@ -1139,6 +1336,110 @@ def _validate_refine_output(
     word_count = len(refined.split())
     if word_count >= 80 and len(blocks) <= 1:
         issues.append("no paragraph breaks (\\n\\n) survived in the rewrite despite the explicit instruction")
+
+    # Structure enforcement - additive to the coverage checks above, which
+    # always win if they conflict (see the module-level comment above the
+    # regex constants this section uses).
+    if task_type == "task_1" and task1_variant != "general":
+        if len(blocks) < 4:
+            issues.append(
+                f"only {len(blocks)} paragraph(s) - Task 1 needs a minimum "
+                f"of 4 (introduction, overview, at least one detail "
+                f"paragraph)"
+            )
+        elif len(blocks) > 5:
+            issues.append(
+                f"{len(blocks)} paragraphs - Task 1 should be 4 (intro, "
+                f"overview, 2 detail paragraphs) or 5 only if covering "
+                f"every chart/category genuinely requires an extra detail "
+                f"paragraph; consolidate rather than fragment further"
+            )
+        if len(blocks) >= 2 and re.search(r'\d', _strip_year_mentions(blocks[1])):
+            issues.append(
+                "overview paragraph (paragraph 2) contains specific "
+                "figures - the overview must state the main pattern "
+                "without numbers; save figures for the detail paragraphs"
+            )
+        if blocks and _TASK1_CONCLUSION_MARKERS.match(blocks[-1]):
+            issues.append(
+                f"the final paragraph reads as a conclusion "
+                f"(\"{blocks[-1][:40]}...\") - Task 1 is a data report and "
+                f"must not have a conclusion paragraph"
+            )
+        opinion_match = _TASK1_OPINION_MARKERS.search(refined)
+        if opinion_match:
+            issues.append(
+                f"contains opinion/recommendation language "
+                f"('{opinion_match.group(0)}') - Task 1 must be purely "
+                f"descriptive, with no thesis, opinion, position, or "
+                f"recommendation"
+            )
+    elif task_type == "task_1" and task1_variant == "general":
+        if len(blocks) < 4:
+            issues.append(
+                f"only {len(blocks)} paragraph(s) - a Task 1 letter needs "
+                f"a minimum of 4 (purpose, then one per required content "
+                f"point, at least)"
+            )
+        salutation = blocks[0] if blocks else ""
+        # A live-measured false positive: real letters sometimes put the
+        # signature on its own blank-line-separated block ("Yours
+        # faithfully,\n\nA Customer") rather than joined to the sign-off
+        # phrase with a single newline - confirmed live, 3/5 real runs on
+        # a genuine letter had this exact shape and the sign-off phrase
+        # itself ended up one block before the true last block. Search the
+        # last two blocks together so either shape is recognised; a body
+        # paragraph accidentally matching the sign-off pattern isn't a
+        # realistic risk (the pattern is specific phrases like "Yours
+        # faithfully", not generic words).
+        closing = " ".join(blocks[-2:]) if len(blocks) >= 2 else (blocks[-1] if blocks else "")
+        if not _LETTER_SALUTATION_PATTERN.match(salutation):
+            issues.append("no salutation ('Dear ...') found at the start of the letter")
+        if not _LETTER_SIGNOFF_PATTERN.search(closing):
+            issues.append("no closing (e.g. 'Yours faithfully'/'Yours sincerely') found at the end of the letter")
+        else:
+            is_unnamed_formal = bool(re.search(r'\bDear\s+Sir\b.{0,15}Madam\b|\bDear\s+Sir\s+or\s+Madam\b', salutation, re.IGNORECASE))
+            is_named = bool(re.match(r'^\s*Dear\s+(?:Mr|Mrs|Ms|Miss|Dr)\.?\s+\w+', salutation, re.IGNORECASE))
+            has_faithfully = bool(re.search(r'\bYours\s+faithfully\b', closing, re.IGNORECASE))
+            has_sincerely = bool(re.search(r'\bYours\s+sincerely\b', closing, re.IGNORECASE))
+            if is_unnamed_formal and has_sincerely:
+                issues.append(
+                    "register mismatch: salutation is to an unnamed "
+                    "recipient ('Dear Sir/Madam') but the closing is "
+                    "'Yours sincerely' - an unnamed recipient takes "
+                    "'Yours faithfully'"
+                )
+            elif is_named and has_faithfully:
+                issues.append(
+                    "register mismatch: salutation names the recipient "
+                    "but the closing is 'Yours faithfully' - a named "
+                    "recipient takes 'Yours sincerely'"
+                )
+    elif task_type == "task_2" and blocks:
+        if not _task2_states_position(blocks[0]):
+            position_hint = (
+                "which side outweighs" if task2_question_type == "advantages_disadvantages"
+                else "a clear position"
+            )
+            issues.append(
+                f"introduction does not state {position_hint} - Task 2 "
+                f"needs a stated stance in the introduction"
+            )
+        conclusion = blocks[-1]
+        restates_position = _task2_states_position(conclusion) or bool(_TASK2_CONCLUSION_TRANSITION.match(conclusion))
+        if not restates_position:
+            issues.append(
+                "conclusion does not restate the position - Task 2's "
+                "conclusion must restate the stance taken in the "
+                "introduction, not just summarise content"
+            )
+        if _TASK2_NEW_IDEA_CONNECTIVES.search(conclusion):
+            issues.append(
+                "conclusion appears to introduce a new idea (contains an "
+                "addition connective like 'furthermore'/'in addition') - "
+                "a Task 2 conclusion must only summarise/restate, never "
+                "introduce new content"
+            )
 
     for m in mistakes or []:
         original = m.get("original") or m.get("sentence") or ""
@@ -1179,6 +1480,7 @@ def _generate_refined_answer_v2(
     word_max: int,
     image_url,
     relevance_status: str = "on_topic",
+    task2_question_type: str = "opinion",
 ) -> dict:
     """Orchestrator for the v2 refine pipeline. Builds the prompt, calls
     call_gpt_refine, validates the result against _validate_refine_output,
@@ -1218,6 +1520,7 @@ def _generate_refined_answer_v2(
             task_type, task1_variant, question, essay, mistakes,
             extracted_data, required_points, word_min, word_max,
             retry_issues=retry_issues, relevance_status=relevance_status,
+            task2_question_type=task2_question_type,
         )
 
         def _call_refine_v2_validated(p, _image_url=image_url):
@@ -1239,6 +1542,7 @@ def _generate_refined_answer_v2(
             parsed, extracted_data, required_points, mistakes, essay,
             task_type, task1_variant, word_min, word_max,
             relevance_status=relevance_status,
+            task2_question_type=task2_question_type,
         )
         attempts_meta.append({"attempt": attempt, "issues": issues})
         if not issues:
@@ -1251,14 +1555,17 @@ def _generate_refined_answer_v2(
     final_issues = attempts_meta[-1]["issues"] if attempts_meta else []
     hard_final_issues = [i for i in final_issues if not i.startswith("word_budget_exceeded")]
 
+    diagnostics = {
+        "validation_passed": not hard_final_issues,
+        "issues": final_issues,
+        "attempts": len(attempts_meta),
+    }
+    if task_type == "task_2":
+        diagnostics["task2_question_type"] = task2_question_type
     return {
         "refined_answer": (parsed.get("refined_answer") or essay).strip(),
         "vocabulary_suggestions": parsed.get("vocabulary_suggestions") or [],
-        "diagnostics": {
-            "validation_passed": not hard_final_issues,
-            "issues": final_issues,
-            "attempts": len(attempts_meta),
-        },
+        "diagnostics": diagnostics,
     }
 
 
@@ -1621,6 +1928,8 @@ def evaluate_writing(data: dict):
         elif task_type == "task_1" and task1_variant == "general":
             required_points_v2 = _derive_required_points_from_gt_question(question)
 
+        task2_question_type = _detect_task2_question_type(question) if task_type == "task_2" else "opinion"
+
         # Deterministic, not GPT-self-reported: relevance_status is already
         # known (computed above from signals GPT already produced), so
         # Python states plainly where the model answer came from rather
@@ -1641,6 +1950,7 @@ def evaluate_writing(data: dict):
             target_min_words, target_max_words,
             image_url=(image_url if extracted_chart_data else None),
             relevance_status=relevance_status,
+            task2_question_type=task2_question_type,
         )
         refine_result_v2["model_answer_source"] = model_answer_source
         refined = refine_result_v2["refined_answer"]

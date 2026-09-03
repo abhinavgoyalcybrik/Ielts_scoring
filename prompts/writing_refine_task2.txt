@@ -32,11 +32,15 @@ MISTAKES ALREADY FLAGGED IN THE CANDIDATE'S ESSAY (do not reproduce any of these
 your rewrite - if the underlying point is valid, express it correctly and differently):
 <<<MISTAKES>>>
 
-STRUCTURE: introduction with a clear, direct position on the question, one body paragraph per
-view the question asks about (addressing both views if it's a discussion-type question, or
-developing your position with distinct supporting points if it's an opinion-type question),
-your own opinion clearly stated, and a conclusion that follows from the body paragraphs.
-Minimum 4 paragraphs total.
+STRUCTURE - this question has been identified as this specific Task 2 type, and its structure
+is NOT the same as the other four types. Follow it exactly, not a generic essay shape:
+
+<<<STRUCTURE_TEMPLATE>>>
+
+Every body paragraph, in all five types, develops as: main idea -> explanation -> example ->
+implication. A list of assertions with no development is what separates a Band 6-7 body from a
+genuine Band 9 one - each body paragraph needs all four of those elements, not just a
+topic sentence.
 
 Separate every paragraph with a real blank line (\n\n) - this is REQUIRED, not optional. A
 response returned as a single block of text is not acceptable.

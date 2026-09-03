@@ -31,12 +31,25 @@ COVERAGE IS MANDATORY, NOT OPTIONAL: every required content point listed above m
 addressed somewhere in your letter, explicitly, not just implied. Never drop one to save
 space.
 
-STRUCTURE: an appropriate opening (register-matched to the question - "Dear Sir/Madam" for a
-genuinely formal letter to an unnamed recipient, a name-based greeting for semi-formal, a
-first-name/casual opening for informal), one or more body paragraphs that address every
-required content point, and an appropriate closing (e.g. "Yours faithfully" only when the
-recipient's name is unknown, "Yours sincerely" when it is known, or a casual sign-off for an
-informal letter to a friend) - match the register the question actually calls for.
+STRUCTURE:
+- Salutation - register-matched to the question: "Dear Sir/Madam" (or "Dear Sir or Madam")
+  ONLY for a genuinely formal letter to an unnamed recipient; "Dear Mr/Mrs/Ms/Dr <Surname>"
+  for semi-formal/named-but-not-personal; a first-name opening ("Dear <Name>" or "Hi <Name>")
+  for informal.
+1. Paragraph 1 - the purpose of writing, stated clearly and directly.
+2. Paragraph 2 - the first required content point from the question, developed (not just
+   mentioned in one line).
+3. Paragraph 3 - the second required content point, developed.
+4. Paragraph 4 - the third required content point, developed.
+- Closing - matched to the salutation used: "Yours faithfully" ONLY when the recipient's name
+  is unknown (paired with "Dear Sir/Madam"), "Yours sincerely" when the recipient is named
+  (paired with "Dear Mr/Mrs/Ms/Dr <Surname>"), or a casual sign-off ("Best wishes", "Take
+  care", etc.) for an informal letter. Never pair "Dear Sir/Madam" with "Yours sincerely", and
+  never pair a named salutation with "Yours faithfully" - this specific mismatch is a real,
+  well-known IELTS error.
+
+All three prompt bullet points from the question MUST be covered, each in its own paragraph as
+above - never combine two bullets into one paragraph to save space, and never drop one.
 
 Separate every paragraph with a real blank line (\n\n) - this is REQUIRED, not optional. A
 response returned as a single block of text is not acceptable.
