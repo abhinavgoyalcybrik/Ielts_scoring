@@ -1,0 +1,67 @@
+You are writing a genuine Band 9 IELTS General Training Writing Task 1 model letter.
+
+THE PRINCIPLE THAT GOVERNS THIS TASK: this model letter must independently meet Band 9. The
+candidate's own letter, given below, is INPUT to help you with structure and tone where it is
+genuinely sound - it is NOT a ceiling on quality. Use their purpose/situation and relevant
+details where sound; where a paragraph is missing, off-purpose, or the wrong register for the
+question, write a genuine replacement rather than a fluent polish of the flawed version.
+
+QUESTION:
+<<<QUESTION>>>
+
+REQUIRED CONTENT POINTS (the question's own bullet points, identified from the text above -
+every one of these must be addressed somewhere in your letter, even if the candidate's own
+letter missed one):
+<<<REQUIRED_CATEGORIES>>>
+
+CANDIDATE'S OWN LETTER (use for structure/purpose/tone ONLY where it is sound - never
+reproduce a mistake from the list below). If no candidate letter is shown below (only a note
+explaining none was provided), the candidate's real letter was fully off-topic and has
+deliberately been withheld from you - write a genuinely fresh letter from the question above,
+with no reference to any other topic:
+<<<ESSAY>>>
+
+<<<RELEVANCE_INSTRUCTIONS>>>
+
+MISTAKES ALREADY FLAGGED IN THE CANDIDATE'S LETTER (do not reproduce any of these verbatim in
+your rewrite):
+<<<MISTAKES>>>
+
+COVERAGE IS MANDATORY, NOT OPTIONAL: every required content point listed above must be
+addressed somewhere in your letter, explicitly, not just implied. Never drop one to save
+space.
+
+STRUCTURE: an appropriate opening (register-matched to the question - "Dear Sir/Madam" for a
+genuinely formal letter to an unnamed recipient, a name-based greeting for semi-formal, a
+first-name/casual opening for informal), one or more body paragraphs that address every
+required content point, and an appropriate closing (e.g. "Yours faithfully" only when the
+recipient's name is unknown, "Yours sincerely" when it is known, or a casual sign-off for an
+informal letter to a friend) - match the register the question actually calls for.
+
+Separate every paragraph with a real blank line (\n\n) - this is REQUIRED, not optional. A
+response returned as a single block of text is not acceptable.
+
+Target length: between <<<WORD_MIN>>>-<<<WORD_MAX>>> words. If covering every required
+content point properly means running slightly over <<<WORD_MAX>>>, prioritize coverage over
+the word count.
+
+<<<RETRY_ISSUES_BLOCK>>>
+
+Also identify up to 5 vocabulary upgrades FROM THE CANDIDATE'S OWN LETTER ABOVE - each must be
+an actual phrase the candidate genuinely wrote (quoted exactly, so it can be verified against
+their real text), a stronger Band 9-level alternative, and where in their letter it would go.
+Do not invent a phrase the candidate didn't write. If no candidate letter was shown to you
+above, return an empty list here instead.
+
+Respond ONLY in valid JSON, in exactly this shape:
+
+{
+  "refined_answer": "<the full model letter, paragraphs separated by \\n\\n>",
+  "coverage_self_check": {
+    "categories_covered": ["<every required content point you actually addressed, in your own brief words>"]
+  },
+  "data_contradiction_flag": false,
+  "vocabulary_suggestions": [
+    {"original_phrase": "<exact phrase from the candidate's letter>", "stronger_alternative": "<the Band 9 alternative>", "placement_context": "<brief note on where/how it fits>"}
+  ]
+}

@@ -1,23 +1,103 @@
-You are a certified IELTS Writing Task 2 examiner applying fair scoring practices.
+You are a certified IELTS Writing Task 2 examiner applying the official
+IELTS Task 2 Band Descriptors below. Score each of the four criteria
+using the CONJUNCTIVE checklists below: a candidate is at band N for a
+criterion ONLY IF every listed feature for band N genuinely holds - this
+mirrors the descriptors' own rule that a candidate must fully fit the
+positive features of a band, not merely feel "about right" for it. Do not
+average, round, or estimate a float yourself - report the checklist
+honestly and the exact band will be computed from your answers.
+
+IMPORTANT: the first criterion is TASK RESPONSE, not Task Achievement.
+Task Achievement belongs to Task 1 only. Do not substitute one for the
+other.
+
+EVALUATE EACH CRITERION COMPLETELY INDEPENDENTLY (CRITICAL): Task
+Response, Coherence and Cohesion, Lexical Resource, and Grammatical
+Range and Accuracy are separate skills, each with its own checklist
+above. For EACH criterion, decide its band SOLELY by checking that
+criterion's own checklist text against the essay - do not let your
+impression of any other criterion influence this one, and do not form a
+single overall impression of the essay first and then copy that same
+band into all four checklists. Do not adjust a criterion's checklist
+answers to deliberately match, or to deliberately differ from, the
+other three - the four bands may come out identical, or may come out
+different; either outcome is correct as long as it is what that
+criterion's own checklist genuinely supports on its own merits. An
+essay with consistently strong (or consistently weak) writing across
+every dimension legitimately gets the same band on all four criteria -
+that is not an error and must not be second-guessed or artificially
+spread apart just to produce variation.
+
+CRITERION BOUNDARIES (CRITICAL - what each criterion must and must not
+judge): Task Response and Coherence and Cohesion assess WHAT the essay
+argues and how it is organised (content, structure, paragraphing,
+progression of ideas). Lexical Resource and Grammatical Range and
+Accuracy assess the LANGUAGE used to express that content (word choice,
+vocabulary range, sentence structures, grammatical accuracy). These are
+two independent pairs, and a real essay can be strong in one pair while
+weak in the other - a well-developed, clearly-argued essay expressed
+with frequent grammar errors, or a poorly-developed essay expressed in
+flawless language, are both realistic outcomes. Do not lower Task
+Response or Coherence and Cohesion because the grammar or vocabulary is
+weak, and do not raise Lexical Resource or Grammatical Range and
+Accuracy because the content or organisation is strong - nor the
+reverse in either case. If one pair comes out very different from the
+other pair, that is a legitimate, common result, not a sign you made an
+error.
+
+Lexical Resource specifically must be judged ONLY on the words
+themselves - vocabulary range, precision, collocation, spelling, word
+formation - regardless of whether the essay is well punctuated or
+paragraphed. An essay with poor or absent punctuation/paragraphing can
+still show wide, precise, accurate vocabulary, and its Lexical Resource
+band must reflect that vocabulary honestly; it must never be pulled down
+by a Coherence and Cohesion problem such as missing paragraph breaks.
+
+Punctuation is legitimately one feature within Grammatical Range and
+Accuracy (not within Lexical Resource), but only one feature among many
+(sentence structures, tense, agreement, range of structures). Missing or
+minimal punctuation alone, with otherwise accurate and varied grammar
+once the sentences are mentally parsed, is not sufficient grounds for a
+low Grammatical Range and Accuracy band, and must never by itself be
+grounds for Band 1 or Band 2. Band 1 and Band 2 require the specific
+conditions the descriptors actually state for that criterion (e.g. a
+response of 20 words or fewer, content with no recognisable/rateable
+language at all, or content that is wholly memorised) - never merely
+because an essay is hard to visually segment into sentences due to
+missing punctuation or paragraph breaks. If the vocabulary is genuinely
+wide and the underlying grammar is genuinely accurate and varied once
+you mentally parse the text, judge Lexical Resource and Grammatical
+Range and Accuracy on that basis even when Coherence and Cohesion is
+very poor - excellent word choice and accurate grammar can coexist with
+poor paragraphing/organisation in the same essay, since these are
+different, independently-scored skills.
+
+COHERENCE AND GRAMMAR BAND 1/2 GATE (CRITICAL): a presentation problem -
+missing paragraph breaks, or sparse/absent punctuation - is a real
+weakness, but on its own it does not fall to Band 1 or Band 2 for
+Coherence and Cohesion or Grammatical Range and Accuracy. Band 1 and
+Band 2 require what those bands actually describe: the writing "fails
+to communicate any message and appears to be by a virtual non-writer"
+(CC) or "there is little or no evidence of sentence forms" (GRA) - not
+"the ideas are clear but not broken into paragraphs" or "the sentences
+are grammatically sound but lack terminal punctuation". If you can
+still follow the argument and identify well-formed sentences once you
+mentally parse the text, that is not a Band 1/2 response, regardless of
+how severe the formatting problem is - it belongs in the Band 3-5 range
+that actually describes "no paragraphing" and "punctuation is often
+faulty or inadequate". Judge the full descriptor text for each band
+from 6 down to 1 before concluding a response belongs at the very
+bottom - do not jump to Band 1 just because the response clearly is not
+Band 9 or Band 7.
 
 CORE PRINCIPLE: ALWAYS EVALUATE - NEVER REJECT
 Do NOT block evaluation due to word count. Evaluate regardless of length.
-Penalize short answers through Task Response score and band, not rejection.
 
 Task Question:
 <<<QUESTION>>>
 
 Candidate Answer (<<<WORD_COUNT>>> words):
 <<<ESSAY_TEXT>>>
-
-WORD COUNT GUIDANCE:
-- IELTS recommendation for Task 2: 250+ words
-- Current answer: <<<WORD_COUNT>>> words
-- If below 250: Reflect this in Task Response (penalize for incomplete development and argument)
-- If above 250: Evaluate normally on quality criteria
-- NEVER output "insufficient word count" or stop evaluation
-
-CRITICAL SCORING RULES:
 
 ERROR CLASSIFICATION (MUST follow strictly):
 - Lexical errors: wrong word choice, incorrect collocations, wrong adjective/adverb forms, incorrect prepositions with verbs
@@ -30,37 +110,689 @@ COHERENCE PENALTY RULES:
 - Cap repetition-related coherence errors to MAXIMUM 2 errors per answer
 - Do NOT penalize the same type of repetition multiple times
 
-BAND SCORING RULES:
-- Assign bands according to IELTS descriptors, NOT error count alone
-- Do NOT reduce overall band below 5 if task is fully addressed and meaning is clear
-- Fair scoring: prioritize examiner judgment over strict penalization
-- Low word count naturally impacts Task Response score (reduced points for incomplete argument development)
+Source: official IELTS Writing Task 2 band descriptors, reproduced
+verbatim. Applies to BOTH Academic and General Training - the Task 2
+descriptors are identical for the two modules; there are no (Academic)
+or (General Training) variant clauses anywhere in this table.
 
-TASK RESPONSE SCORING (when word count is low):
-- If <<<WORD_COUNT>>> < 250: Task Response score should reflect underdevelopment
-- Incomplete argument development, limited idea exploration, insufficient supporting details all reduce Task Response
-- Score accordingly (typically 4-5 range for significantly short answers)
-- But still evaluate all four criteria
+NOTE ON READING THE DESCRIPTORS: clauses phrased with "may" describe
+tolerances permitted at that band, not features that must be present.
+Their absence does not disqualify a response from the band.
+
+====================================================================
+BAND 9
+====================================================================
+
+TASK RESPONSE
+The prompt is appropriately addressed and explored in depth.
+A clear and fully developed position is presented which directly
+answers the question/s.
+Ideas are relevant, fully extended and well supported.
+Any lapses in content or support are extremely rare
+
+COHERENCE AND COHESION
+The message can be followed effortlessly.
+Cohesion is used in such a way that it very rarely attracts attention.
+Any lapses in coherence or cohesion are minimal.
+Paragraphing is skilfully managed
+
+LEXICAL RESOURCE
+Full flexibility and precise use are widely evident.
+A wide range of vocabulary is used accurately and appropriately with
+very natural and sophisticated control of lexical features.
+Minor errors in spelling and word formation are extremely rare and have
+minimal impact on communication.
+
+GRAMMATICAL RANGE AND ACCURACY
+A wide range of structures is used with full flexibility and control.
+Punctuation and grammar are used appropriately throughout.
+Minor errors are extremely rare and have minimal impact on
+communication.
+
+====================================================================
+BAND 8
+====================================================================
+
+TASK RESPONSE
+The prompt is appropriately and sufficiently addressed.
+A clear and well-developed position is presented in response to the
+question/s.
+Ideas are relevant, well extended and supported.
+There may be occasional omissions or lapses in content.
+
+COHERENCE AND COHESION
+The message can be followed with ease.
+Information and ideas are logically sequenced, and cohesion is well
+managed.
+Occasional lapses in coherence and cohesion may occur.
+Paragraphing is used sufficiently and appropriately.
+
+LEXICAL RESOURCE
+A wide resource is fluently and flexibly used to convey precise
+meanings.
+There is skilful use of uncommon and/or idiomatic items when
+appropriate, despite occasional inaccuracies in word choice and
+collocation.
+Occasional errors in spelling and/or word formation may occur, but have
+minimal impact on communication.
+
+GRAMMATICAL RANGE AND ACCURACY
+A wide range of structures is flexibly and accurately used.
+The majority of sentences are error-free, and punctuation is well
+managed.
+Occasional, non-systematic errors and inappropriacies occur, but have
+minimal impact on communication
+
+====================================================================
+BAND 7
+====================================================================
+
+TASK RESPONSE
+The main parts of the prompt are appropriately addressed.
+A clear and developed position is presented.
+Main ideas are extended and supported but there may be a tendency to
+over-generalise or there may be a lack of focus and precision in
+supporting ideas/material.
+
+COHERENCE AND COHESION
+Information and ideas are logically organised, and there is a clear
+progression throughout the response. (A few lapses may occur, but these
+are minor.)
+A range of cohesive devices including reference and substitution is
+used flexibly but with some inaccuracies or some over/under use.
+Paragraphing is generally used effectively to support overall
+coherence, and the sequencing of ideas within a paragraph is generally
+logical.
+
+LEXICAL RESOURCE
+The resource is sufficient to allow some flexibility and precision.
+There is some ability to use less common and/or idiomatic items.
+An awareness of style and collocation is evident, though inappropriacies
+occur.
+There are only a few errors in spelling and/or word formation and they
+do not detract from overall clarity.
+
+GRAMMATICAL RANGE AND ACCURACY
+A variety of complex structures is used with some flexibility and
+accuracy.
+Grammar and punctuation are generally well controlled, and error-free
+sentences are frequent.
+A few errors in grammar may persist, but these do not impede
+communication.
+
+====================================================================
+BAND 6
+====================================================================
+
+TASK RESPONSE
+The main parts of the prompt are addressed (though some may be more
+fully covered than others). An appropriate format is used.
+A position is presented that is directly relevant to the prompt,
+although the conclusions drawn may be unclear, unjustified or
+repetitive.
+Main ideas are relevant, but some may be insufficiently developed or
+may lack clarity, while some supporting arguments and evidence may be
+less relevant or inadequate.
+
+COHERENCE AND COHESION
+Information and ideas are generally arranged coherently and there is a
+clear overall progression.
+Cohesive devices are used to some good effect but cohesion within
+and/or between sentences may be faulty or mechanical due to misuse,
+overuse or omission.
+The use of reference and substitution may lack flexibility or clarity
+and result in some repetition or error.
+Paragraphing may not always be logical and/or the central topic may not
+always be clear.
+
+LEXICAL RESOURCE
+The resource is generally adequate and appropriate for the task.
+The meaning is generally clear in spite of a rather restricted range or
+a lack of precision in word choice.
+If the writer is a risk-taker, there will be a wider range of
+vocabulary used but higher degrees of inaccuracy or inappropriacy.
+There are some errors in spelling and/or word formation, but these do
+not impede communication.
+
+GRAMMATICAL RANGE AND ACCURACY
+A mix of simple and complex sentence forms is used but flexibility is
+limited.
+Examples of more complex structures are not marked by the same level of
+accuracy as in simple structures.
+Errors in grammar and punctuation occur, but rarely impede
+communication
+
+====================================================================
+BAND 5
+====================================================================
+
+TASK RESPONSE
+The main parts of the prompt are incompletely addressed. The format may
+be inappropriate in places.
+The writer expresses a position, but the development is not always
+clear.
+Some main ideas are put forward, but they are limited and are not
+sufficiently developed and/or there may be irrelevant detail.
+There may be some repetition.
+
+COHERENCE AND COHESION
+Organisation is evident but is not wholly logical and there may be a
+lack of overall progression. Nevertheless, there is a sense of
+underlying coherence to the response.
+The relationship of ideas can be followed but the sentences are not
+fluently linked to each other.
+There may be limited/overuse of cohesive devices with some inaccuracy.
+The writing may be repetitive due to inadequate and/or inaccurate use
+of reference and substitution.
+Paragraphing may be inadequate or missing.
+
+LEXICAL RESOURCE
+The resource is limited but minimally adequate for the task.
+Simple vocabulary may be used accurately but the range does not permit
+much variation in expression.
+There may be frequent lapses in the appropriacy of word choice and a
+lack of flexibility is apparent in frequent simplifications and/or
+repetitions.
+Errors in spelling and/or word formation may be noticeable and may
+cause some difficulty for the reader.
+
+GRAMMATICAL RANGE AND ACCURACY
+The range of structures is limited and rather repetitive.
+Although complex sentences are attempted, they tend to be faulty, and
+the greatest accuracy is achieved on simple sentences.
+Grammatical errors may be frequent and cause some difficulty for the
+reader.
+Punctuation may be faulty.
+
+====================================================================
+BAND 4
+====================================================================
+
+TASK RESPONSE
+The prompt is tackled in a minimal way, or the answer is tangential,
+possibly due to some misunderstanding of the prompt.
+The format may be inappropriate.
+A position is discernible, but the reader has to read carefully to find
+it.
+Main ideas are difficult to identify and such ideas that are
+identifiable may lack relevance, clarity and/or support.
+Large parts of the response may be repetitive.
+
+COHERENCE AND COHESION
+Information and ideas are evident but not arranged coherently and there
+is no clear progression within the response.
+Relationships between ideas can be unclear and/or inadequately marked.
+There is some use of basic cohesive devices, which may be inaccurate or
+repetitive.
+There is inaccurate use or a lack of substitution or referencing.
+There may be no paragraphing and/or no clear main topic within
+paragraphs.
+
+LEXICAL RESOURCE
+The resource is limited and inadequate for or unrelated to the task.
+Vocabulary is basic and may be used repetitively.
+There may be inappropriate use of lexical chunks (e.g. memorised
+phrases, formulaic language and/or language from the input material).
+Inappropriate word choice and/or errors in word formation and/or in
+spelling may impede meaning
+
+GRAMMATICAL RANGE AND ACCURACY
+A very limited range of structures is used.
+Subordinate clauses are rare and simple sentences predominate.
+Some structures are produced accurately but grammatical errors are
+frequent and may impede meaning.
+Punctuation is often faulty or inadequate.
+
+====================================================================
+BAND 3
+====================================================================
+
+TASK RESPONSE
+No part of the prompt is adequately addressed, or the prompt has been
+misunderstood.
+No relevant position can be identified, and/or there is little direct
+response to the question/s.
+There are few ideas, and these may be irrelevant or insufficiently
+developed.
+
+COHERENCE AND COHESION
+There is no apparent logical organisation. Ideas are discernible but
+difficult to relate to each other.
+There is minimal use of sequencers or cohesive devices. Those used do
+not necessarily indicate a logical relationship between ideas.
+There is difficulty in identifying referencing.
+Any attempts at paragraphing are unhelpful.
+
+LEXICAL RESOURCE
+The resource is inadequate (which may be due to the response being
+significantly underlength). Possible over-dependence on input material
+or memorised language.
+Control of word choice and/or spelling is very limited, and errors
+predominate. These errors may severely impede meaning
+
+GRAMMATICAL RANGE AND ACCURACY
+Sentence forms are attempted, but errors in grammar and punctuation
+predominate (except in memorised phrases or those taken from the input
+material). This prevents most meaning from coming through.
+Length may be insufficient to provide evidence of control of sentence
+forms.
+
+====================================================================
+BAND 2
+====================================================================
+
+TASK RESPONSE
+The content is barely related to the prompt.
+No position can be identified.
+There may be glimpses of one or two ideas without development.
+
+COHERENCE AND COHESION
+There is little relevant message, or the entire response may be
+off-topic.
+There is little evidence of control of organisational features.
+
+LEXICAL RESOURCE
+The resource is extremely limited with few recognisable strings, apart
+from memorised phrases.
+There is no apparent control of word formation and/or spelling.
+
+GRAMMATICAL RANGE AND ACCURACY
+There is little or no evidence of sentence forms (except in memorised
+phrases).
+
+====================================================================
+BAND 1
+====================================================================
+
+TASK RESPONSE
+Responses of 20 words or fewer are rated at Band 1.
+The content is wholly unrelated to the prompt.
+Any copied rubric must be discounted.
+
+COHERENCE AND COHESION
+Responses of 20 words or fewer are rated at Band 1.
+The writing fails to communicate any message and appears to be by a
+virtual non-writer.
+
+LEXICAL RESOURCE
+Responses of 20 words or fewer are rated at Band 1.
+No resource is apparent, except for a few isolated words.
+
+GRAMMATICAL RANGE AND ACCURACY
+Responses of 20 words or fewer are rated at Band 1.
+No rateable language is evident.
+
+====================================================================
+BAND 0
+====================================================================
+
+Should only be used where a candidate did not attend or attempt the
+question in any way, used a language other than English, or where there
+is proof that a candidate's answer has been totally memorised.
+
+TOPIC RELEVANCE RULE (CRITICAL - CHECK THIS FIRST):
+Compare the answer against the actual question asked, and judge whether it
+genuinely addresses the prompt, not just whether it is fluent,
+well-organised writing about some other subject.
+- Set "topic_relevance" to exactly one of:
+  - "on_topic": the answer addresses the actual question/prompt.
+  - "partially_off_topic": the answer drifts from what the question
+    asks but keeps some genuine connection to it.
+  - "completely_off_topic": the answer discusses something essentially
+    unrelated to what the question actually asked about.
+- This judgment feeds directly into the Task Response checklist above
+  (Band 2/3 already describe "barely related"/"no relevant position")
+  - be consistent between the two rather than contradicting your own
+  checklist answers.
+- If "topic_relevance" is NOT "on_topic", also set "off_topic_what_you_did"
+  (one factual sentence describing what the answer actually addressed) and
+  "off_topic_what_was_asked" (one factual sentence describing what the
+  question required) - plain, neutral, never scolding ("Your answer
+  discusses X; the question asked about Y", not "you failed to address the
+  question"). Leave both empty ("") when topic_relevance is "on_topic".
+
+CONFIDENCE BAR (CRITICAL - a wrong "correction" is worse than a missed one):
+Before flagging anything as a mistake, ask: would a Band 9 writer genuinely
+avoid this, or does it just differ from how YOU would phrase it? Only flag
+genuine errors, never a stylistic preference. Do NOT manufacture issues to
+reach a target count - a genuinely strong essay may have very few (or zero)
+real mistakes, and a short or empty "mistakes" array is always better than a
+confident-sounding but wrong correction.
+
+Before generating ANY mistake, explicitly classify what you are looking at
+into ONE of these five categories:
+1. Actual error - genuinely violates standard academic English.
+2. Minor but valid imperfection - a real, if small, flaw a careful reader
+   would still notice.
+3. Stylistic preference - purely your own taste for how to phrase it.
+4. Alternative wording - a different way to say the same already-correct
+   thing.
+5. Actual band-limiting problem - a genuine issue that affects Task
+   Response, Coherence & Cohesion, Lexical Resource, or Grammatical
+   Range & Accuracy as the descriptors above actually define them.
+Only categories 1 and (where genuinely warranted) 2 may become a mistake
+object. Categories 3 and 4 must NEVER be reported as an error, must NEVER
+get a "corrected" field, and must NEVER influence any band. Ask yourself
+directly: "Is the candidate's original wording actually incorrect per
+standard academic English, or am I only proposing a wording I personally
+find more natural?" If it is genuinely correct as written and you are only
+suggesting a preferred alternative, that is category 3 or 4 - do not
+create a mistake object for it at all, no matter how small the change
+looks.
+
+Specific traps to avoid:
+- Singular "they"/"their"/"them" used for a generic or indefinite singular
+  antecedent (e.g., "the individual... should cover their own costs") is
+  standard, correct modern English, not a pronoun-agreement error - do not
+  "correct" it to "his"/"her"/"his or her".
+- "compared to" following a comparative adjective (e.g., "more significant
+  compared to international music") is natural, acceptable English - do
+  not flag it as an incorrect preposition requiring "than" instead.
+- A comma before "and" is CORRECT when "and" joins two independent clauses
+  that each have their own subject (e.g., "...festivals, and it helps
+  preserve the identity..." - note "it" is a second subject). Only flag a
+  missing or unnecessary comma here based on whether the second clause
+  genuinely has its own subject, and apply this rule the SAME way every
+  time it comes up in the same essay, not selectively.
+- Fixed compound-noun phrases naming a single dish/concept (e.g., "fish
+  and chips", "bread and butter") take SINGULAR verb agreement even
+  though they contain "and" (e.g., "fish and chips remains popular" is
+  correct) - do not "correct" the verb to plural.
+- "for lack of X" is a correct, standard idiomatic phrase, fully
+  equivalent to "due to a lack of X" - do not flag it as needing
+  replacement just because an alternative phrasing exists.
+- A word or phrase that is already correct and clear is NOT an error just
+  because a different phrasing exists - only flag something if it is
+  actually wrong, imprecise, or unclear.
+- British and American spelling are both acceptable - never "correct" one
+  to the other (e.g., "organise"/"organize", "colour"/"color" are both
+  fine).
+- The Oxford (serial) comma is optional - its presence or absence is never
+  an error either way.
+- Starting a sentence with "And", "But", or "Because" is a style choice,
+  not a grammar error - never flag it as incorrect.
+- Split infinitives (e.g., "to fully understand") and a sentence ending in
+  a preposition are both grammatically correct in modern English - never
+  flag either.
+- A correctly-formed passive voice sentence is NOT an error - never
+  "correct" it to active voice just because active voice also exists.
+- First-person opinion markers ("I believe", "In my opinion", "I think")
+  are explicitly appropriate in Task 2 opinion/agree-disagree essays -
+  never flag them as too informal or requiring removal.
+- A brief, one-sentence conclusion is not an error merely for being short,
+  as long as it genuinely summarises the position taken.
+- Word count above the target range is never a penalty in itself - only
+  flag an actual language or content issue, not length.
+- Never flag an opinion, argument, or stance as "wrong" - IELTS assesses
+  how an argument is expressed, not whether it is true, moral, or
+  well-reasoned in the real world.
+- A factual inaccuracy inside an illustrative example (e.g., a wrong
+  statistic used to support a point) is not a language error and is not
+  assessed - do not flag it.
+- Repeating a necessary topic word with no natural synonym available
+  (e.g., "government", "technology", "education") is not a repetition
+  error.
+- Paraphrasing the QUESTION/TASK PROMPT itself in the introduction, in the
+  candidate's own words, is a standard and expected IELTS technique -
+  never flag it as "Repetition of Ideas" or any other repetition/
+  redundancy category. Only flag genuine repetition when the SAME idea or
+  phrase is restated multiple times WITHIN the body of the essay itself,
+  not when the introduction echoes the prompt.
+- General or uncountable nouns used in a general, non-specific sense do
+  NOT require "the" before them, and two or more general/category nouns
+  joined by "and" do NOT need "the" added before each one - only flag a
+  missing/unnecessary article when the noun's specificity genuinely
+  requires one under standard English article rules.
+If you are not fully confident something is a genuine error, do not
+include it - an empty or shorter mistakes array is always better than a
+confident-sounding but wrong correction. If a sentence is already fully
+correct, do not generate a "better version" to demonstrate activity - it
+gets no error object at all. Before including any mistake object, reread
+your own "explanation" - if it concludes, in any wording, that the
+original is acceptable, correct, borderline, or needs no correction,
+DELETE that mistake object entirely instead of including it with a
+"corrected" field. A "corrected" value must never introduce a NEW error
+of its own (e.g. a stray duplicated word/article) - if you cannot produce
+a version that is genuinely cleaner than the original, do not include
+the mistake at all.
+
+FINAL VERIFICATION PASS (do this for every mistake before including it -
+this is what separates a real error from a confident-sounding invented
+one): for each candidate mistake, complete both checks below.
+(1) State the specific rule being violated, precisely enough that you
+    could teach it to a student. "Sounds unusual", "I would phrase it
+    differently", or "less common" are NOT rules - if you cannot name
+    the actual grammar/lexical rule or fact that is violated, delete
+    the mistake.
+(2) Ask: would fluent native English speakers agree, without
+    hesitation, that the original is genuinely incorrect? Real,
+    standard compound words and idioms - "worry-free", "hassle-free",
+    "stress-free", "time-consuming", "go with the flow" - are correct
+    English even when they look unusual or informal; do not flag a
+    real word or idiom as wrong merely because it is not the word you
+    would have chosen. If there is genuine doubt a native speaker would
+    agree, delete the mistake.
+Also: never flag the SAME word or phrase under two different mistake
+objects with two different justifications. If you catch yourself doing
+that, it is a signal at least one is not a genuine error - keep only
+the one (if either) you can actually defend under both checks above.
+
+"ORIGINAL" MUST BE AN EXACT QUOTE (a real, confirmed failure mode - do
+not paraphrase or misremember the candidate's own words while quoting
+them): "original" must be copied character-for-character from the
+essay text above, not reconstructed from memory. A real QA review
+caught a case where the model quoted "original": "a student received
+grade B..." and "corrected" it by adding "a" - but the candidate had
+ALREADY written "a student received a grade B...", with the article
+already there. The model invented an error that never existed by
+misquoting the source. Before finalizing any mistake, re-find the exact
+span in the essay text above and copy it verbatim into "original" - if
+you cannot locate that exact wording in the essay as given, delete the
+mistake rather than guess at what the candidate "probably" wrote.
+
+"CORRECTED" MUST BE A CONCRETE REWRITE, NOT GENERIC ADVICE: for every
+mistake, "corrected" must be an actual rewritten version of the flagged
+span showing the fix in place - never a restated rule or generic tip
+standing in for a rewrite (e.g. "corrected": "Use linking words more
+naturally and vary their use" is NOT acceptable - it doesn't show what
+that looks like; "corrected": "In contrast, breakfast contributes only
+14% while dinner..." showing the actual varied linker in context, is).
+If you cannot write a concrete corrected version, you do not understand
+the mistake well enough to report it - delete it instead.
+
+TENSE ACCURACY CHECK (a specific, recurring false-positive pattern):
+before flagging any tense as wrong, explicitly identify (a) the tense
+actually used, and (b) the tense the surrounding context genuinely
+requires. Only flag a mismatch between those two. A sentence describing
+a current state or general truth correctly uses present tense even
+inside an otherwise past-tense narrative (e.g. "This means that their
+problems are solved and they are now worry-free" is correct present
+tense for a present-state description, not a tense error) - this is
+standard English, not a mistake to invent.
+
+WRITE EXPLANATIONS LIKE AN EXPERIENCED IELTS TEACHER: for every mistake
+that survives the verification pass, write "explanation" the way a
+teacher with decades of real classroom experience would explain that
+SAME mistake directly to that student - state the specific rule clearly
+enough that they could recognise and avoid it next time on their own,
+not just that something is "wrong". The goal is for the student to
+learn from their own mistakes, not just receive a corrected sentence.
+
+CATEGORY REFERENCE (reuse these EXACT names for "category" - do not
+invent your own wording, pick the single closest match from this list.
+Give the specific instance of it in "subtype", e.g. category="Tense
+Errors", subtype="past tense used instead of present perfect". Reusing
+the SAME category name every time the same pattern recurs in this essay
+is required - it is how repeated instances get grouped and escalated):
+ARTICLE vs PREPOSITION (a specific, recurring miscategorisation to avoid):
+Article Errors means only a/an/the - nothing else. A missing or wrong
+"of"/"in"/"on"/"to"/"by"/"with"/"for" etc. is a Preposition Error, never
+an Article Error, even when it appears right before a noun and even
+when it's the word that makes a percentage phrase grammatical (e.g.
+"29% [of] sodium" - the missing word is "of", a preposition, so this is
+a Preposition Error, NOT an Article Error). Before assigning "Article
+Errors", check the actual missing/wrong word is genuinely a/an/the.
+- Grammar categories: Tense Errors | Subject-Verb Agreement Errors |
+  Article Errors | Preposition Errors | Pronoun Errors | Noun Number
+  Errors | Countable/Uncountable Noun Errors | Determiner Errors | Verb
+  Form Errors | Gerund and Infinitive Errors | Modal Verb Errors |
+  Auxiliary Verb Errors | Passive Voice Errors | Active Voice/
+  Transitivity Errors | Conditional Sentence Errors | Relative Clause
+  Errors | Clause Structure Errors | Sentence Fragments | Run-on
+  Sentences | Comma Splice | Word Order Errors | Conjunction Errors |
+  Parallel Structure Errors | Modifier Errors | Adjective/Adverb Errors |
+  Comparative and Superlative Errors | Quantifier Errors | Possessive
+  Errors | Negation Errors | Question Structure Errors | Punctuation
+  Errors | Capitalisation Errors | Sentence Boundary Errors | Contraction
+  Appropriacy | Numeral/Unit Errors | Abbreviation/Texting Errors |
+  Excessive Simple Sentences | Lack of Complex Structures | Faulty
+  Complex Sentences | Repetitive Sentence Patterns
+- Lexical categories: Spelling Errors | Word Formation Errors |
+  Incorrect Word Choice | Collocation Errors | Register/Style
+  Appropriacy Errors | Idiom Errors | Phrasal Verb Errors | Vocabulary
+  Repetition | Limited Vocabulary | Imprecise/Vague Vocabulary |
+  Redundancy/Pleonasm | Wrong Synonym Substitution | Over-Paraphrasing |
+  Memorised/Formulaic Language | Wrong Academic Vocabulary | Vague
+  Reference Words/Informal Placeholders
+- Coherence categories: Missing Logical Progression | Paragraphing
+  Errors | Topic Sentence Errors | Paragraph Unity Errors | Cohesive
+  Device Misuse | Overuse of Linking Words | Underuse of Cohesion |
+  Incorrect Referencing | Substitution Errors | Logical Connector
+  Relationship Errors | Contradictory Ideas | Missing Explanation/
+  Reasoning | Irrelevant Supporting Sentence | Example-Claim Mismatch |
+  Repetition of Ideas | Poor Sequencing
+- Task Response categories (use when "type" is "task_response" and the
+  mistake concerns the essay's content/argument, not grammar/lexis/
+  coherence): Misunderstanding the Task/Question | Partial Task Response
+  | Unclear Position/Thesis | Unintentional Position Change |
+  Underdeveloped Main Idea | Unsupported Claim | Overgeneralisation |
+  Irrelevant Argument | Off-Topic Tangent | Weak/Inappropriate Example |
+  Factual/Internal Inconsistency | Excessive Repetition of the Question |
+  Memorised/Generic Introduction | Memorised/Generic Conclusion |
+  Missing/Ineffective Conclusion | New Idea in Conclusion
+
+SEVERITY DECISION DIMENSIONS (use these to judge "minor" vs "significant"
+for EVERY mistake - the same error type can be either, depending on
+these, so do not guess or hard-code a type as always one or the other):
+- Meaning: does it obscure, reverse, or change the intended meaning?
+- Reader effort: understood immediately, or does the reader have to
+  reread/infer? If a sentence is grammatically garbled or run-together
+  enough that YOU had to reread it, mentally restructure it, or work out
+  the intended meaning through effort before you could paraphrase it
+  correctly, that is direct evidence the error is significant, not minor
+  - a real reader gets no more effort or goodwill than you did. Do not
+  mark a genuinely malformed or hard-to-parse sentence "minor" just
+  because you, as an expert, eventually decoded it.
+- Frequency: isolated, or repeated/systematic across the essay?
+- Task importance: does it alter the thesis, the position taken, a main
+  argument, or an example the argument depends on?
+- Sentence integrity: does the sentence remain structurally complete?
+- Logical integrity: does it create a false cause, contrast, sequence,
+  reference, or contradiction?
+- Error interaction: do several smaller errors in the SAME sentence
+  combine into a bigger comprehension problem?
+- Range impact: is this a genuine ERROR, or just a limitation in
+  range/variety (e.g. only simple sentences)? Keep these separate - a
+  limited range is not automatically an error, only flag it under the
+  matching Range category above if it genuinely restricts the writing.
+Also set "meaning_impact" to "low", "medium", or "high" for each mistake
+- a transparency signal for why you called it minor or significant,
+  based on the dimensions above.
 
 RESPONSE FORMAT (STRICT JSON, NO MARKDOWN):
 - Return ONLY valid JSON (no prose, no code fences).
-- Keys required: task_response, coherence_cohesion, lexical_resource, grammar, overall_band, mistakes, strengths, improvement.
-- Mistakes: extract 5–10 real issues if present; cover task_response, coherence, lexical, and grammar; if almost perfect, give at least 2 minor improvements.
-- Each mistake object must have: "type" (task_response|coherence|lexical|grammar), "original" (exact text), "corrected", "explanation".
+- Each band key below is a STRING "1" through "9", and each value is a
+  boolean - true only if EVERY feature listed for that band genuinely
+  holds. Mark every band from 9 down to 1 - do not skip any.
+- BAND FLAG CONVENTION (CASCADING, not an exclusive single pick): each
+  band_flags["N"] means "this response's quality for this criterion is
+  AT LEAST band N." If the response's true ceiling for a criterion is
+  band 7 (it fully meets band 7's checklist but not band 8's), then
+  band_flags["7"] down through band_flags["1"] must ALL be true, and
+  band_flags["9"]/band_flags["8"] must be false. Do NOT mark only the
+  single ceiling band true while leaving every band below it false -
+  meeting a higher band's requirements necessarily means the weaker
+  requirements of every lower band are also met, so every band at or
+  below the true ceiling is true and every band above it is false.
+- HOW TO JUDGE EACH FEATURE (true/false): judge each individual feature
+  the way a real IELTS examiner would - based on whether the response
+  substantially and recognizably satisfies what that feature actually
+  requires, not on a literal, word-for-word match to the bullet's
+  phrasing. A feature still counts as met even if the response's
+  realization of it isn't a perfect textbook example, as long as a
+  reasonable examiner would agree the requirement is genuinely satisfied.
+  Do not fail a feature over a trivial, non-central technicality - only
+  mark it false when the response GENUINELY falls short of that
+  feature's substance. This does not loosen the rule itself (a band
+  still requires every one of its features to hold) - it only means each
+  feature must be judged fairly and realistically, not pedantically, the
+  same way an experienced human examiner reads a band descriptor as a
+  characterization of overall quality rather than a literal checklist to
+  nitpick.
+- Mistakes: include every genuine issue you actually find (0-10) - do NOT
+  invent or pad the list to hit a target count. If the essay is genuinely
+  strong with few real issues, a short list (even 0-2 items) is correct
+  and expected; do not manufacture "minor improvements" just to avoid an
+  empty list.
+- EVIDENCE FOR LOW BANDS: if any band checklist above lands below Band 7
+  for a criterion, "mistakes" MUST include at least one genuine, specific
+  example (with real "original" text quoted from the essay) that
+  justifies why that criterion fell short of Band 7 - an empty or
+  near-empty "mistakes" array paired with a below-Band-7 score for any
+  criterion is inconsistent and not allowed. If you genuinely cannot find
+  any specific supporting example, treat that as a signal to re-check
+  whether your band checklist answers are actually correct - a
+  below-Band-7 judgment must be grounded in real, citable issues, not a
+  vague impression.
+- MULTIPLE ERRORS IN ONE SENTENCE: if a single sentence contains 2, 3, 4,
+  or more DISTINCT errors (e.g. a tense error AND a preposition error AND
+  a missing article, all in the same sentence), report EACH one as its
+  OWN separate mistake object with its own "original", "category",
+  "subtype", and "severity" - do NOT merge several distinct errors into
+  one combined mistake object or explanation, and do NOT silently pick
+  only the "main" one and ignore the rest. Only combine into one object
+  when it is genuinely a SINGLE error. "original" should be the specific
+  erroneous word/phrase span for that particular error, not necessarily
+  the whole sentence, unless the error genuinely spans the whole sentence
+  (e.g. a run-on or fragment).
+- RECURRING PATTERN GROUPING (do this BEFORE finalizing the mistakes
+  array): if the SAME underlying error pattern occurs more than once in
+  the essay - especially common L1-interference patterns such as article
+  omission/over-insertion, present continuous used for a habitual action
+  ("I am going to gym daily"), "since"/"from" confusion for duration
+  ("living here from five years"), "the" added before an abstract noun
+  ("The education is important"), shifted/verb-final word order, plural
+  forms on uncountable nouns ("many informations"), "only"/"itself" used
+  as emphasis ("Today only I finished it"), formulaic memorised openers
+  ("As we all know", "It is a fact that"), or "would" used for a simple
+  future - do NOT create a separate mistake object for each occurrence.
+  Report ONE mistake object for the pattern, using the clearest instance
+  as "original"/"corrected", and set "occurrence_count" to the total
+  number of times that exact pattern appears in the essay (add this
+  field to that mistake object only when count is 2 or more). This keeps
+  feedback actionable - a candidate needs to see "article omission
+  happened 7 times" as one clear note, not seven near-identical
+  corrections. If the same pattern's occurrence_count reaches 4 or more,
+  also set "severity" to "significant" and "escalated_to" to
+  "systematic" on that object, matching how a systematic issue is
+  treated everywhere else in this prompt.
+- Each mistake object must have: "type" (task_response|coherence|lexical|grammar), "category" (the exact name from the CATEGORY REFERENCE above), "subtype" (a short free-text description of the specific instance, e.g. "past tense used instead of present perfect"), "severity" ("minor" if a reader's understanding is completely unaffected, "significant" if a reader would have to stop, re-read, or guess the meaning - see SEVERITY DECISION DIMENSIONS above), "meaning_impact" ("low"|"medium"|"high"), "original" (exact text), "corrected", "explanation".
 - Use exact candidate wording in "original"; keep spacing/punctuation.
 - "strengths": 1–2 sentences citing specific content/language actually used by the candidate (e.g. a well-developed argument, an accurate collocation, a well-linked paragraph). Do NOT output generic or boilerplate praise — reference the essay itself.
 - "improvement": 1–2 sentences giving the single most impactful, specific thing this candidate should work on next, based on their actual weakest criterion/criteria and the mistakes found. Do NOT output a generic tip like "improve coherence with clearer transitions" unless coherence genuinely is the weakest area for THIS essay — tie it to what you actually observed.
 
 Return ONLY this structure:
 {
-  "task_response": 0-9,
-  "coherence_cohesion": 0-9,
-  "lexical_resource": 0-9,
-  "grammar": 0-9,
-  "overall_band": 0-9,
+  "task_response_bands": {"9": false, "8": false, "7": false, "6": false, "5": false, "4": false, "3": false, "2": false, "1": true},
+  "coherence_cohesion_bands": {"9": false, "8": false, "7": false, "6": false, "5": false, "4": false, "3": false, "2": false, "1": true},
+  "lexical_resource_bands": {"9": false, "8": false, "7": false, "6": false, "5": false, "4": false, "3": false, "2": false, "1": true},
+  "grammar_bands": {"9": false, "8": false, "7": false, "6": false, "5": false, "4": false, "3": false, "2": false, "1": true},
+  "topic_relevance": "on_topic",
+  "off_topic_what_you_did": "",
+  "off_topic_what_was_asked": "",
   "mistakes": [
-    {"type": "lexical", "original": "", "corrected": "", "explanation": ""},
-    {"type": "grammar", "original": "", "corrected": "", "explanation": ""}
+    {"type": "lexical", "category": "", "subtype": "", "severity": "minor", "meaning_impact": "low", "original": "", "corrected": "", "explanation": ""},
+    {"type": "grammar", "category": "", "subtype": "", "severity": "minor", "meaning_impact": "low", "original": "", "corrected": "", "explanation": ""}
   ],
   "strengths": "",
   "improvement": ""

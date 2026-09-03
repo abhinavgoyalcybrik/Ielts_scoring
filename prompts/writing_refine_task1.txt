@@ -1,0 +1,82 @@
+You are writing a genuine Band 9 IELTS Writing Task 1 model answer.
+
+THE PRINCIPLE THAT GOVERNS THIS TASK: this model answer must independently meet Band 9. The
+candidate's own answer, given below, is INPUT to help you with structure and phrasing where
+it is genuinely sound - it is NOT a ceiling on quality, and it is NOT a source of truth for
+data. Where the candidate's own stated figures disagree with the extracted chart data below,
+the extracted chart data is correct and wins, silently, in your rewrite - do not repeat the
+candidate's error, and do not mention that a disagreement exists (that is reported to the
+candidate separately, as a Task Achievement issue, not inside this model answer).
+
+QUESTION:
+<<<QUESTION>>>
+
+EXTRACTED CHART DATA (the ground truth for this task - use this, not the candidate's essay,
+for every figure and category you report):
+<<<EXTRACTED_DATA>>>
+
+CANDIDATE'S OWN ANSWER (use for structure/phrasing/approach ONLY where it is sound - never
+as a source of data, and never reproduce a mistake from the list below). If no candidate
+answer is shown below (only a note explaining none was provided), the candidate's real
+answer was fully off-topic and has deliberately been withheld from you - write a genuinely
+fresh report from the question and the extracted chart data above, with no reference to any
+other topic:
+<<<ESSAY>>>
+
+<<<RELEVANCE_INSTRUCTIONS>>>
+
+MISTAKES ALREADY FLAGGED IN THE CANDIDATE'S ANSWER (do not reproduce any of these verbatim in
+your rewrite - if a flagged phrase describes something genuinely true about the data, express
+it correctly and differently):
+<<<MISTAKES>>>
+
+COVERAGE IS MANDATORY, NOT OPTIONAL:
+- Every chart identified in the extracted data must be covered in your answer with its own
+  real figures. If there are 3 charts, write about 3. If there are 2, write about 2. Never
+  drop an entire chart or category to save space or hit a word count - that is a worse
+  failure than running over the word budget.
+- Every category within every chart must be named somewhere in your answer, with its actual
+  value, not a vague reference.
+- Structure your body paragraphs around the extracted charts/categories - as many body
+  paragraphs as are needed to cover everything without cramming unrelated charts together
+  just to force a fixed paragraph count.
+
+STRUCTURE:
+1. Introduction - paraphrase the question/task in your own words. Do not copy the question
+   verbatim.
+2. Overview - 2-3 sentences on the main pattern(s) (highest, lowest, general trend) with NO
+   specific figures yet - save the figures for the detail paragraphs.
+3. Detail paragraph(s) - one or more body paragraphs, grouped logically by chart or by
+   related categories, each with real figures and meaningful comparisons (not just a list of
+   numbers).
+4. No conclusion paragraph - Task 1 does not take one.
+
+Separate every paragraph with a real blank line (\n\n) - this is REQUIRED, not optional. A
+response returned as a single block of text is not acceptable.
+
+Target length: between <<<WORD_MIN>>>-<<<WORD_MAX>>> words. If covering every required chart
+and category properly means running slightly over <<<WORD_MAX>>>, prioritize coverage over
+the word count - a complete answer that is a little long is far better than a shorter one
+missing required content.
+
+<<<RETRY_ISSUES_BLOCK>>>
+
+Also identify up to 5 vocabulary upgrades FROM THE CANDIDATE'S OWN ANSWER ABOVE - each must be
+an actual phrase the candidate genuinely wrote (quoted exactly, so it can be verified against
+their real text), a stronger Band 9-level alternative, and where in their answer it would go.
+Do not invent a phrase the candidate didn't write, and do not suggest generic "impressive"
+words unconnected to what they actually wrote. If no candidate answer was shown to you above,
+return an empty list here instead.
+
+Respond ONLY in valid JSON, in exactly this shape:
+
+{
+  "refined_answer": "<the full model answer, paragraphs separated by \\n\\n>",
+  "coverage_self_check": {
+    "categories_covered": ["<every category name you actually included, exactly as named in the extracted data>"]
+  },
+  "data_contradiction_flag": <true if any figure in your OWN refined_answer disagrees with the extracted chart data - this should almost always be false; it exists so you can self-catch a slip>,
+  "vocabulary_suggestions": [
+    {"original_phrase": "<exact phrase from the candidate's answer>", "stronger_alternative": "<the Band 9 alternative>", "placement_context": "<brief note on where/how it fits>"}
+  ]
+}

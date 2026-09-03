@@ -1,0 +1,64 @@
+You are writing a genuine Band 9 IELTS Writing Task 2 model essay.
+
+THE PRINCIPLE THAT GOVERNS THIS TASK: this model essay must independently meet Band 9. The
+candidate's own essay, given below, is INPUT - it is NOT a ceiling on quality. A Band 9 essay
+written from a weak submission and one written from a strong submission should both be
+genuine Band 9 - they will differ in content, not in quality.
+
+Read the candidate's essay and identify: their overall position, their argument(s) for each
+view the question asks about, and their examples.
+- Keep what is sound: if their position is clear and on-topic, argue the SAME position. If an
+  example is relevant and genuinely supports its point, keep it and develop it further/more
+  precisely.
+- Replace what is not sound: if an argument is circular, an example doesn't actually support
+  its point, or a paragraph drifts off the question, write a genuinely different, sound
+  replacement - do NOT simply rewrite the flawed version in more fluent language. A fluent
+  sentence stating a weak or illogical point is worse than the original, because the
+  candidate will trust it as correct.
+- If no candidate essay is shown below (only a note explaining none was provided), the
+  candidate's real answer was fully off-topic and has deliberately been withheld from you -
+  write a genuinely fresh essay directly from the question, with no reference to any other
+  topic.
+
+QUESTION:
+<<<QUESTION>>>
+
+CANDIDATE'S OWN ESSAY:
+<<<ESSAY>>>
+
+<<<RELEVANCE_INSTRUCTIONS>>>
+
+MISTAKES ALREADY FLAGGED IN THE CANDIDATE'S ESSAY (do not reproduce any of these verbatim in
+your rewrite - if the underlying point is valid, express it correctly and differently):
+<<<MISTAKES>>>
+
+STRUCTURE: introduction with a clear, direct position on the question, one body paragraph per
+view the question asks about (addressing both views if it's a discussion-type question, or
+developing your position with distinct supporting points if it's an opinion-type question),
+your own opinion clearly stated, and a conclusion that follows from the body paragraphs.
+Minimum 4 paragraphs total.
+
+Separate every paragraph with a real blank line (\n\n) - this is REQUIRED, not optional. A
+response returned as a single block of text is not acceptable.
+
+Target length: between <<<WORD_MIN>>>-<<<WORD_MAX>>> words. If developing the argument
+properly means running slightly over <<<WORD_MAX>>>, prioritize a complete, well-developed
+answer over hitting the word count exactly.
+
+<<<RETRY_ISSUES_BLOCK>>>
+
+Also identify up to 5 vocabulary upgrades FROM THE CANDIDATE'S OWN ESSAY ABOVE - each must be
+an actual phrase the candidate genuinely wrote (quoted exactly, so it can be verified against
+their real text), a stronger Band 9-level alternative, and where in their essay it would go.
+Do not invent a phrase the candidate didn't write, and do not suggest generic "impressive"
+words unconnected to what they actually wrote. If no candidate essay was shown to you above,
+return an empty list here instead.
+
+Respond ONLY in valid JSON, in exactly this shape:
+
+{
+  "refined_answer": "<the full model essay, paragraphs separated by \\n\\n>",
+  "vocabulary_suggestions": [
+    {"original_phrase": "<exact phrase from the candidate's essay>", "stronger_alternative": "<the Band 9 alternative>", "placement_context": "<brief note on where/how it fits>"}
+  ]
+}

@@ -1,0 +1,39 @@
+You are extracting the raw data from an IELTS Writing Task 1 (Academic) chart/graph/diagram
+image, so that a separate step can later write an accurate model answer from it.
+
+CRITICAL: you are NOT being shown any candidate's answer, and you must not assume one. Base
+everything below ONLY on what the attached image and the question actually show. Do not
+invent a chart type, category, or value that isn't visibly present.
+
+QUESTION:
+<<<QUESTION>>>
+
+TASK:
+1. Identify the chart type(s). If the image contains multiple charts/graphs/tables (e.g.
+   three pie charts, or a bar chart plus a table), treat each as a separate entry - do not
+   merge them into one.
+2. For each chart: its title (if shown), every category/series/segment it contains, the
+   unit of measurement (%, count, years, etc.), and every value shown for every
+   category/series.
+3. Identify the overall pattern across the data (highest, lowest, any clear trend) in plain
+   language, without picking a specific paragraph structure yet - that happens later.
+
+Respond ONLY in valid JSON, in exactly this shape:
+
+{
+  "chart_count": <integer>,
+  "charts": [
+    {
+      "chart_type": "<line_graph | bar_chart | pie_chart | table | process_diagram | map | other>",
+      "title": "<the chart's title, or a short description if untitled>",
+      "categories": [
+        {"name": "<category/series name>", "values": {"<series or time label>": "<value with unit>"}}
+      ],
+      "units": "<the unit used, e.g. '%', 'thousand visitors', 'years'>"
+    }
+  ],
+  "overview_pattern": "<1-3 sentences describing the main pattern(s) across all charts - highest, lowest, any clear trend - no paragraph structure, just the pattern itself>"
+}
+
+If the image does not actually contain a chart (e.g. it failed to load, or shows something
+unrelated), set "chart_count" to 0 and "charts" to an empty list rather than guessing.
