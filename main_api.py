@@ -62,8 +62,15 @@ app.include_router(writing_router)
 app.include_router(reading_router)
 app.include_router(listening_router)
 app.include_router(speaking_audio.router)
-app.include_router(speaking_part_router)
-app.include_router(speaking_text_router)
+# speaking_part_router (/speaking/part/{part}/audio) and speaking_text_router
+# (/speaking/evaluate) unmounted - confirmed no consumer (the frontend uses
+# only /speaking/audio/question-wise, registered above via speaking_audio.
+# router), and both routed into the legacy scoring engine with the known
+# 4.0-floor issue documented in SPEAKING_ENGINE_CONSOLIDATION.md. Disabled,
+# not deleted - the code behind both is untouched and this reverses by
+# uncommenting these two lines. Deletion is a separate, later step.
+# app.include_router(speaking_part_router)
+# app.include_router(speaking_text_router)
 
 # Health Check
 @app.get("/health")
