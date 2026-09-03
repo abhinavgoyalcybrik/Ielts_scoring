@@ -10,6 +10,7 @@ before deploying.
 |---|---|---|
 | `WRITING_MODEL_OVERRIDE` | **`gpt-4o`** (ships ON) | Writing's scoring+detection model. Was `gpt-4.1-mini`; flipped after n=5 testing showed detection reliability going from 1/15→5/5 and 0/15→5/5 on two real error cases. Adds ~**$0.056/submission** (~5.6¢) vs. the old model — see `scripts/eval_log_report.py` for real per-submission cost once traffic exists. |
 | `WRITING_INDEPENDENT_MODEL_ANSWER` | OFF | v2 refine pipeline — builds the "model answer" independently instead of rewriting a possibly-weak submission, and (as of this update) enforces the correct Band 9 structure per task variant: Task 1 Academic is a data report (no thesis/opinion/conclusion), Task 1 GT is a register-matched letter, Task 2 gets one of 5 structures depending on question type (opinion/discussion/advantages-disadvantages/problem-solution/two-part). Safe to leave off. |
+| `WRITING_SEVERITY_CALIBRATION` | OFF | Adds reader-effort-first severity guidance to Writing's mistake-generation prompt. Measured effect is real but weak/inconsistent - see the dedicated section below before enabling. Safe to leave off. |
 | `SPEAKING_MISTAKE_SEVERITY_SPLIT` | OFF | Splits Speaking mistakes into significant/minor + adds deterministic word-repetition detection. Repetition thresholds are provisional (not calibrated on real data). Safe to leave off. |
 | `SPEAKING_VOICED_WPM` | OFF | Switches Speaking's "active" WPM figure from raw-duration to voiced-duration basis. Safe to leave off. |
 | `EVAL_LOG_ENABLED` | ON (infra, not a scoring behavior change) | Fire-and-forget append-only JSONL logging of every evaluation to `eval_logs/`. Cannot block or alter a response — write happens off the request path. |
@@ -107,3 +108,49 @@ conjunctive-checklist scoring volatility (see the "two-band context effect" find
 not a content defect introduced by the structure templates. This is a scoring-side issue,
 out of scope for this change (scope was explicitly refine-prompt-only) - flagged here for
 whoever next touches Writing's scoring checklist, not fixed by this update.
+
+## Update: severity/meaning_impact calibration - real effect, but weak and uneven
+
+Four real QA cases prompted this: three mistakes over-rated "significant" despite fully
+recoverable meaning, one under-rated "minor" despite forcing a re-read. Added reader-effort
+framing plus two worked examples (pulled from the real cases, not invented) to Writing's
+mistake-generation prompt, behind `WRITING_SEVERITY_CALIBRATION` (new flag, default OFF).
+Deliberately not a one-directional "prefer minor" nudge - the under-rated case would have
+gotten worse from that.
+
+**Case 1 (a "Paragraphing Errors" mistake quoting literal `/n/n`) was never a severity bug.**
+It's the newline-escaping fix (see `_fix_literal_newline_escaping`, unconditional, no flag)
+reaching production before it existed. Confirmed with hard evidence: the QA sample files are
+timestamped 2026-09-01, the fix landed in commit `16129ce` on 2026-09-03. Re-ran the exact
+source essay live 20/20 times (both flag states) - the fix fires every time and the bug
+never reproduces once.
+
+**Cases 2-4, measured live at n=5 on the real source essays, flag OFF vs ON:**
+- Case 3 (the under-rated "In these two maps, there have been two features that still
+  remained") - **improved**: significant/medium in 4/5 flag-ON detections, was minor/low
+  historically. This is the direction the guidance was built to fix, and it worked.
+- Case 2 ("An individual who come into the country" - subject-verb) - **did not move at
+  all**: significant/medium in 5/5 runs both before and after.
+- Case 4 ("public car park which located" - missing article) - **inconsistent both ways**,
+  no clear improvement: minor in 2/3 flag-OFF detections, minor in 1/2 flag-ON detections.
+
+**Working hypothesis for why cases 2/4 didn't reliably move**: the guidance text names three
+error types as "almost always minor" (articles, subject-verb, prepositions) but only gives
+ONE worked example, for an article omission. GPT may be anchoring on that concrete example
+rather than generalizing the principle to the other two named types - subject-verb (zero
+worked example, zero movement) fits that pattern more than article (partial worked example
+overlap, partial/inconsistent movement) does. Not confirmed, just the best-supported
+explanation from what was measured - flagging it rather than iterating further, since this
+session's own standing instruction is to report a measurement like this rather than keep
+tuning until the number looks right.
+
+**Confirmed unaffected**: bands did not move in any of the 20 live runs (5.5 on both essays,
+both flag states) - severity feeds escalation, not scoring, exactly as expected.
+
+**Proposed, not built**: a deterministic Python check flagging severity/meaning_impact
+contradictions (minor+high, significant+low) for reporting. Measured against every saved
+real run this session has (313 mistakes with both fields present): **8.0% contradiction
+rate (25/313), entirely in the significant+low direction** - zero minor+high cases found.
+The live n=5 sample showed 11-14% (Task 1) and 0% (Task 2) - consistent with the historical
+rate given the much smaller sample. Worth building as a reported diagnostic once there's a
+real decision about where those reports should surface; not implemented.

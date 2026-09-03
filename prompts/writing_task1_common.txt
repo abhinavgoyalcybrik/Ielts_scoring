@@ -438,6 +438,8 @@ Also set "meaning_impact" to "low", "medium", or "high" for each mistake
 - a transparency signal for why you called it minor or significant,
   based on the dimensions above.
 
+<<<SEVERITY_CALIBRATION_GUIDANCE>>>
+
 RESPONSE FORMAT (STRICT JSON, NO MARKDOWN):
 - Return ONLY valid JSON (no prose, no code fences).
 - Each band key below is a STRING "1" through "9", and each value is a

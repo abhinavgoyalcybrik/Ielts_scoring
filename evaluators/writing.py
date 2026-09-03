@@ -122,6 +122,49 @@ IMAGE_VERIFICATION_INSTRUCTIONS = (
     "invented figures not in the image, or confused categories)."
 )
 
+# WRITING_SEVERITY_CALIBRATION flag (default OFF) - fills the
+# <<<SEVERITY_CALIBRATION_GUIDANCE>>> placeholder in writing_task1_common.txt
+# and writing_task2_prompt.txt. Reinforces (does not replace) the existing
+# SEVERITY DECISION DIMENSIONS list, which already names "reader effort" as
+# one of seven co-equal dimensions - live QA found that buried framing isn't
+# enough: real output over-rated a clear subject-verb slip and a clear
+# missing-article as "significant" (meaning was completely recoverable in
+# both), while under-rating a genuinely garbled sentence as "minor" (a
+# reader has to re-read it). This makes reader effort the DECISIVE test
+# rather than one item in a list, with two worked examples pulled directly
+# from those real cases - not invented ones, per instruction. Deliberately
+# NOT a one-directional "prefer minor" nudge: the under-rated case is given
+# equal weight to the two over-rated ones, since a blanket nudge would only
+# have made that one worse.
+SEVERITY_CALIBRATION_GUIDANCE = (
+    "SEVERITY CALIBRATION - READ BEFORE ASSIGNING SEVERITY TO ANY MISTAKE:\n"
+    "The decisive test is READER EFFORT, not error type. Every mistake you flag is by "
+    "definition a rule violation - that alone tells you nothing about severity. The only "
+    "question that matters: does a reader have to stop, re-read, or guess to get the "
+    "meaning? If not, it is minor, no matter how \"wrong\" the grammar rule technically is.\n"
+    "\n"
+    "Article omissions, subject-verb agreement slips, and preposition errors are almost "
+    "always MINOR in isolation - meaning survives them intact and a reader glides past "
+    "them without noticing. They become significant only when the SAME type recurs often "
+    "enough to be systematic (handled separately - do not pre-empt that by marking an "
+    "isolated first occurrence significant).\n"
+    "Worked example - MINOR: \"public car park which located on the east-side of the city "
+    "hospital\" (missing article, wrong verb form). A reader understands this instantly; "
+    "the meaning is fully recoverable. This is minor, not significant - even though two "
+    "things are technically wrong with it.\n"
+    "\n"
+    "Awkward or garbled phrasing is SIGNIFICANT even when no single word is \"wrong\", and "
+    "even when it looks less like a rule violation than a missing article does.\n"
+    "Worked example - SIGNIFICANT: \"In these two maps, there have been two features that "
+    "still remained.\" A reader has to re-read this to parse it; the tense and structure "
+    "genuinely obscure the intended meaning. This is significant, not minor - despite "
+    "having no single isolated \"error\" as clear-cut as a missing article.\n"
+    "\n"
+    "meaning_impact must agree with severity: \"minor\"+\"high\" and \"significant\"+\"low\" "
+    "are contradictions. If they disagree, reconsider which one is wrong before returning "
+    "either."
+)
+
 # Static, non-GPT explanatory text for the "severity" tag attached to each
 # mistake - mistakes are shown so the candidate can polish further, but the
 # tag itself is the only signal for whether an issue actually affects the
@@ -1680,6 +1723,13 @@ def evaluate_writing(data: dict):
         if image_url:
             image_verification_text = IMAGE_VERIFICATION_INSTRUCTIONS
 
+    # WRITING_SEVERITY_CALIBRATION (default OFF) - see
+    # SEVERITY_CALIBRATION_GUIDANCE's own comment above for why this exists.
+    # Empty-string no-op when off, same pattern as image_verification_text.
+    severity_calibration_text = ""
+    if os.getenv("WRITING_SEVERITY_CALIBRATION", "false").strip().lower() == "true":
+        severity_calibration_text = SEVERITY_CALIBRATION_GUIDANCE
+
     prompt = (
         prompt_template
         .replace("<<<QUESTION>>>", question)
@@ -1687,6 +1737,7 @@ def evaluate_writing(data: dict):
         .replace("<<<WORD_COUNT>>>", str(word_count))
         .replace("<<<TASK_TYPE>>>", task_type)
         .replace("<<<IMAGE_VERIFICATION_INSTRUCTIONS>>>", image_verification_text)
+        .replace("<<<SEVERITY_CALIBRATION_GUIDANCE>>>", severity_calibration_text)
     )
 
     # A genuine GPT/API failure (not "the model found nothing to flag")
