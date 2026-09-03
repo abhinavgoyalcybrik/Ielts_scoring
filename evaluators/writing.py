@@ -13,6 +13,13 @@ from utils.safety import safe_gpt_call, safe_output, normalize_feedback
 BASE_DIR = Path(__file__).resolve().parents[1]
 PROMPTS_DIR = BASE_DIR / "prompts"
 
+# Item 7 - see _mistake_spans_whole_essay(). Calibrated against every
+# mistake (206 total) in every real saved run this session produced: the
+# largest confirmed-genuine multi-criterion mistake reached 69% of its
+# (58-word) essay, and every confirmed whole-essay-feedback case was
+# >=73%, so 70% sits in the gap between them.
+_WHOLE_ESSAY_MISTAKE_FRACTION = 0.70
+
 RELEVANCE_NOTICE_MESSAGES = {
     "completely_off_topic": "Your answer is not relevant to the topic of the question asked.",
     "partially_off_topic": "Your answer only partly addresses the topic of the question asked.",
@@ -661,6 +668,29 @@ def _mistake_correction_relates_to_original(original: str, corrected: str, refin
     if overlap < 0.3 and len(corr_tokens) > len(orig_tokens) * 1.5:
         return False
     return True
+
+
+def _mistake_spans_whole_essay(original: str, essay: str) -> bool:
+    """Item 7 - a real, confirmed bug distinct from
+    _mistake_correction_relates_to_original() above: a mistake whose
+    "original" span covers most of the essay isn't a per-span error, it's
+    essay-level feedback (in every confirmed case, a "needs paragraphing"
+    complaint) wearing a mistake object's shape. Live output produced one
+    with a 227-word original (73% of a 310-word essay) and a genuinely
+    essay-scale "corrected" alongside it - the correction-relatedness
+    check above can't catch this, since its unrelated-content path only
+    fires when "corrected" is long AND has low word overlap with
+    "original"; a rewrite of the same essay naturally shares plenty of
+    words with what it's rewriting, and this check needs to fire
+    regardless of what "corrected" contains anyway (a shorter, genuinely
+    related "corrected" is just as much a non-fix as a longer one).
+    Threshold is calibrated, not guessed - see
+    _WHOLE_ESSAY_MISTAKE_FRACTION's definition for the real numbers."""
+    essay_word_count = count_words(essay)
+    if not essay_word_count:
+        return False
+    original_word_count = count_words(_strip_wrapping_quotes(original))
+    return (original_word_count / essay_word_count) >= _WHOLE_ESSAY_MISTAKE_FRACTION
 
 
 def get_vocabulary_to_learn(essay: str, task_type: str, band: float, question: str = "") -> list:
@@ -1703,6 +1733,17 @@ def evaluate_writing(data: dict):
                 m.get("original") or m.get("sentence") or "",
                 m.get("corrected") or m.get("correction") or "",
                 refined,
+            ):
+                continue
+            # Item 7: drop whole-essay-feedback mistakes. In every
+            # calibration case this caught, the same guidance (usually
+            # "clearer paragraphing") was already present in the
+            # improvement field independently - nothing is lost by
+            # dropping it from mistakes, it's just no longer double-
+            # counted as a per-span error there.
+            if _mistake_spans_whole_essay(
+                m.get("original") or m.get("sentence") or "",
+                essay,
             ):
                 continue
             filtered_mistakes.append(m)

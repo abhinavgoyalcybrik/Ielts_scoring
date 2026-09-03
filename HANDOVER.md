@@ -46,3 +46,17 @@ split into `writing_task1_common.txt` + academic/general criteria files) don't
 appear verbatim in any replacement file: a Band-5 floor rule, short-answer scoring
 guidance, and mistake-volume guidance. Flagged for a separate decision, not silently
 dropped or silently restored.
+
+## Update: whole-essay mistake guard (Item 7)
+
+`evaluators/writing.py`'s `_mistake_spans_whole_essay()` drops any mistake whose
+`"original"` span covers 70%+ of the essay's word count - unconditional, no new flag,
+same pattern as the other five deterministic mistake filters (verbatim check,
+correction-relatedness, severity normalization/escalation, dedupe) already shipping
+unconditionally. Catches a confirmed bug: a mistake object that's really essay-level
+feedback (in every observed case, "needs paragraphing") rather than a per-span error.
+Calibrated against 206 real mistakes from every saved run this session produced;
+70% sits in the gap between the largest confirmed-genuine mistake (69%, on a short
+essay) and the smallest confirmed whole-essay case (73%). In every case this guard
+drops, the same guidance was already present independently in the `improvement`
+field - nothing is lost, it's just no longer double-counted as a per-span error.
