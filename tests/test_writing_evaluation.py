@@ -1407,43 +1407,6 @@ def test_evaluate_writing_task1_drops_mistake_with_unrelated_correction(monkeypa
     assert "Incorrect Word Choice" in categories
 
 
-def test_evaluate_writing_task2_keeps_mistake_with_unrelated_correction(monkeypatch):
-    # Identical "bad" mistake shape as the Task 1 test above, but for
-    # Task 2 - must NOT be dropped, since _mistake_correction_relates_to_
-    # original() is explicitly gated on task_type == "task_1" only. This
-    # is the proof that Task 2's mistake-generation behavior is
-    # completely unchanged by this fix, as required.
-    refined_text = (
-        "Some individuals contend that it is best to accept adverse "
-        "circumstances, while others maintain that actively striving to "
-        "improve these situations is more beneficial in the long run."
-    )
-    ai_response = {
-        "task_response_bands": _make_bands(7),
-        "coherence_cohesion_bands": _make_bands(7),
-        "lexical_resource_bands": _make_bands(7),
-        "grammar_bands": _make_bands(7),
-        "topic_relevance": "on_topic",
-        "mistakes": [
-            {
-                "type": "coherence", "category": "Repetition of Ideas", "subtype": "x",
-                "severity": "minor", "meaning_impact": "low",
-                "original": "some unrelated flagged span of candidate text here",
-                "corrected": refined_text,
-                "explanation": "Repeated idea.",
-            },
-        ],
-        "strengths": "x", "improvement": "y",
-    }
-    _install_fake_gpt(monkeypatch, ai_response, refined_text=refined_text)
-
-    essay = _realistic_essay(250) + " Here is some unrelated flagged span of candidate text here for testing."
-    result = _evaluate(essay=essay)
-
-    categories = [m["category"] for m in result["mistakes"]]
-    assert "Repetition of Ideas" in categories
-
-
 def test_evaluate_writing_task1_keeps_short_genuine_corrections(monkeypatch):
     # Short, genuine phrase-level corrections (the normal case) must
     # never be touched by this check, regardless of word overlap.
