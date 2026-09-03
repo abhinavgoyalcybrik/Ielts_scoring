@@ -2,8 +2,9 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from uuid import uuid4
 
 from utils.audio_transcriber import transcribe_audio
-from utils.audio_features import extract_audio_features
+from utils.audio_features import compute_speech_rate_wpm, extract_audio_features
 from utils.audio_normalizer import normalize_to_wav
+from utils.eval_log import log_evaluation
 from evaluators.speaking import evaluate_speaking_part
 from storage.speaking_store import SPEAKING_ATTEMPTS
 
@@ -36,12 +37,13 @@ async def upload_speaking_audio(
     transcript = transcribe_audio(wav_path)
     audio_metrics = extract_audio_features(wav_path)
 
-    # Speech rate (WPM)
-    words = len(transcript.split())
-    duration = audio_metrics.get("duration_sec", 1)
-    speech_rate = round((words / duration) * 60) if duration > 0 else 0
-
-    audio_metrics["speech_rate_wpm"] = speech_rate
+    # Speech rate (WPM) - both denominators always computed (see
+    # compute_speech_rate_wpm), "active" selects the one that actually
+    # drives evaluate_speaking_part()'s scoring, per SPEAKING_LEGACY_VOICED_WPM.
+    wpm = compute_speech_rate_wpm(transcript, audio_metrics)
+    audio_metrics["speech_rate_wpm_raw"] = wpm["raw"]
+    audio_metrics["speech_rate_wpm_voiced"] = wpm["voiced"]
+    audio_metrics["speech_rate_wpm"] = wpm["active"]
 
     # ---- EVALUATION ----
     result = evaluate_speaking_part(
@@ -52,6 +54,22 @@ async def upload_speaking_audio(
 
     # ---- STORE RESULT (SAME attempt_id) ----
     SPEAKING_ATTEMPTS[attempt_id]["parts"][part] = result
+
+    # Logged under a distinct evaluator name (not "speaking") - this is a
+    # different scoring engine (evaluators/speaking.py's
+    # evaluate_speaking_part, not speaking_audio.py's generate_scores) from
+    # a different live endpoint, and the log needs to be able to tell them
+    # apart to answer which endpoint real traffic actually uses.
+    log_evaluation({
+        "evaluator": "speaking_legacy_part_audio",
+        "task_or_part": f"part_{part}",
+        "question": None,
+        "input_text": transcript,
+        "response": result,
+        "model_default": "gpt-4o-mini",
+        "flags": {},
+        "audio_metrics": audio_metrics,
+    })
 
     return {
         "attempt_id": attempt_id,

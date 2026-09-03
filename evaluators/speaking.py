@@ -65,7 +65,7 @@ TOPIC_KEYWORDS = {
 # Each word must be IELTS Band 6+ (B2/C1 level minimum)
 VOCABULARY_DATABASE = {
     "technology": {
-        "part_1": [
+        "part_1": [           
             {"word": "gadget", "usage_hint": "compact technological device used for specific functions", "cefr": "B1"},
             {"word": "screen time", "usage_hint": "duration spent engaging with digital displays daily", "cefr": "B2"},
             {"word": "application", "usage_hint": "software program designed for specific computing tasks", "cefr": "B1"},

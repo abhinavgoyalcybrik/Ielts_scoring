@@ -8,7 +8,9 @@ from utils.audio_normalizer import normalize_to_wav
 
 from utils.audio_transcriber import transcribe_audio
 
-from utils.gpt_client import call_gpt
+from utils.gpt_client import call_gpt, call_gpt_strong, record_token_usage
+
+from utils.eval_log import log_evaluation
 
 from utils.safety import safe_gpt_call, normalize_feedback
 
@@ -69,6 +71,9 @@ VOCAB_FALLBACK_PART1 = [
     {"word": "facilitate", "meaning": "make something easier"},
     {"word": "interact", "meaning": "communicate and engage with others"},
     {"word": "diverse", "meaning": "showing variety and difference"},
+    {"word": "convenient", "meaning": "suiting your needs or plans well"},
+    {"word": "occasionally", "meaning": "sometimes, but not often"},
+    {"word": "routine", "meaning": "a regular way or order of doing things"},
 ]
 
 VOCAB_FALLBACK_PART2 = [
@@ -77,6 +82,9 @@ VOCAB_FALLBACK_PART2 = [
     {"word": "highlight", "meaning": "draw attention to something important"},
     {"word": "contribute", "meaning": "give or add to something"},
     {"word": "worthwhile", "meaning": "worth the time or effort spent"},
+    {"word": "vivid", "meaning": "producing a clear, sharp impression in the mind"},
+    {"word": "memorable", "meaning": "worth remembering or easy to remember"},
+    {"word": "eventually", "meaning": "after some time; in the end"},
 ]
 
 VOCAB_FALLBACK_PART3 = [
@@ -85,6 +93,9 @@ VOCAB_FALLBACK_PART3 = [
     {"word": "postulate", "meaning": "suggest as a theory or idea"},
     {"word": "perspective", "meaning": "a particular way of viewing something"},
     {"word": "integration", "meaning": "combining parts into a whole"},
+    {"word": "significant", "meaning": "important enough to be worth noting"},
+    {"word": "consequently", "meaning": "as a result of something"},
+    {"word": "controversial", "meaning": "causing disagreement or differing opinions"},
 ]
 
 
@@ -238,7 +249,7 @@ def _wav_duration_seconds(path: str) -> float:
 
 
 
-def _trim_wav(path: str, max_seconds: float = 90.0):
+def _trim_wav(path: str, max_seconds: float = 300.0):
 
     """Trim WAV file to max_seconds in-place."""
 
@@ -638,6 +649,16 @@ def extract_acoustic_features(audio_path, transcript: str = ""):
 
         "duration_sec": round(duration, 2),
 
+        # Always present regardless of SPEAKING_VOICED_WPM (diagnostic, not
+        # behaviour) - voiced_time was already being computed above for the
+        # (unused-elsewhere) speech_rate proxy; exposing it directly is the
+        # actual raw/voiced-duration gap, in seconds, so both numbers and
+        # the silence fraction are visible side by side rather than only
+        # one or the other.
+        "voiced_duration_sec": round(voiced_time, 2),
+
+        "silence_fraction": round(1 - (voiced_time / duration), 4) if duration > 0 else None,
+
         "pause_count": pause_count,
 
         "avg_pause_duration": avg_pause_duration,
@@ -676,7 +697,7 @@ def extract_acoustic_features(audio_path, transcript: str = ""):
 
 
 
-def split_transcript_with_gpt(transcript: str, questions: list):
+def split_transcript_with_gpt(transcript: str, questions: list, usage_log=None):
 
     """
 
@@ -736,7 +757,7 @@ Return a JSON array of answers in order (no extra text).
     response = safe_gpt_call(
         prompt,
         fallback=fallback,
-        caller=call_gpt
+        caller=lambda p: call_gpt(p, usage_log=usage_log)
     )
 
     if isinstance(response, list):
@@ -832,6 +853,37 @@ def _normalize_numbered_band9_answer(result: str, answer_count: int) -> str:
     return result
 
 
+def _split_band9_answer_per_question(normalized_band9_answer: str, expected_count: int) -> list:
+    """Split an already-normalized band9_answer block (guaranteed to be
+    "Answer 1: ...\\n\\nAnswer 2: ..." by _normalize_numbered_band9_answer,
+    which always emits sequential "Answer N:" labels regardless of which
+    internal parsing path produced it) back into one string per question,
+    so each question can carry its OWN refined/model answer instead of
+    only the combined block at the end of the part. Returns a list of
+    length expected_count; every item is None (not a guess) if the split
+    didn't produce exactly that many labeled answers - attaching a refined
+    answer to the wrong question would be worse than showing none."""
+    text = (normalized_band9_answer or "").strip()
+    if not text or expected_count <= 0:
+        return [None] * max(expected_count, 0)
+
+    matches = re.findall(r"(?im)^Answer\s*\d+:\s*(.*?)(?=\n\nAnswer\s*\d+:|\Z)", text, re.S)
+    if len(matches) != expected_count:
+        return [None] * expected_count
+
+    return [m.strip() for m in matches]
+
+
+def _attach_refined_answers(qas_clean: list, band9_answer: str) -> None:
+    """Mutates qas_clean in place, adding a "refined_answer" field to each
+    question - the portal needs a corrected/polished version attached to
+    each individual Q&A, not only the combined band9_answer block for the
+    whole part."""
+    pieces = _split_band9_answer_per_question(band9_answer, len(qas_clean))
+    for qa, piece in zip(qas_clean, pieces):
+        qa["refined_answer"] = piece
+
+
 BAND9_QUALITY_BAR = """
 A genuine Band 9 response, per the official IELTS Speaking Band Descriptors, must:
 - Fully develop the topic with relevant, coherent content - never a single clipped
@@ -872,7 +924,7 @@ def _band9_word_count(text: str) -> int:
     return len((text or "").split())
 
 
-def generate_band9_answer(part_number: int, combined_with_context: str, answers_only: str | None = None) -> str:
+def generate_band9_answer(part_number: int, combined_with_context: str, answers_only: str | None = None, usage_log=None) -> str:
     overlap_text = answers_only or combined_with_context
     answer_count = _count_band9_answers(combined_with_context, answers_only)
 
@@ -926,13 +978,14 @@ TOPIC AWARENESS RULES:
 Output only the numbered answers. No extra labels. No explanation."""
 
     try:
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=OPENAI_TIMEOUT_SECONDS)
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), base_url=os.environ.get("OPENAI_BASE_URL"), timeout=OPENAI_TIMEOUT_SECONDS)
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=os.environ.get("OPENAI_MODEL_OVERRIDE", "gpt-4o"),
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
+            temperature=0.0,
             max_tokens=800
         )
+        record_token_usage(response, usage_log)
         result = response.choices[0].message.content.strip()
         logging.warning(f"[BAND9 SUCCESS] part={part_number} words={len(result.split())}")
 
@@ -944,12 +997,20 @@ Output only the numbered answers. No extra labels. No explanation."""
         if overlap > 0.60:
             logging.warning("[BAND9] Too similar, retrying...")
             retry_prompt = prompt + "\n\nREJECTED: Too similar to student answer. Use completely different words and sentence structures."
+            # Deliberately NOT 0.0 like every other Speaking call - this
+            # retry's whole purpose is to sample something DIFFERENT from
+            # the first (identically-prompted-minus-one-line) attempt.
+            # temperature=0 would make it deterministically reproduce the
+            # same "too similar" text again, defeating the retry entirely.
+            # Kept low (0.3, not the previous 0.9) so it's still far more
+            # deterministic than before, without being pointless.
             retry_response = client.chat.completions.create(
-                model="gpt-4o",
+                model=os.environ.get("OPENAI_MODEL_OVERRIDE", "gpt-4o"),
                 messages=[{"role": "user", "content": retry_prompt}],
-                temperature=0.9,
+                temperature=0.3,
                 max_tokens=800
             )
+            record_token_usage(retry_response, usage_log)
             result = retry_response.choices[0].message.content.strip()
 
         # Part 2 must be a full long-turn talk (~200-250 words), not a
@@ -964,11 +1025,12 @@ Output only the numbered answers. No extra labels. No explanation."""
                 "Do not summarize - develop each point with detail."
             )
             length_retry_response = client.chat.completions.create(
-                model="gpt-4o",
+                model=os.environ.get("OPENAI_MODEL_OVERRIDE", "gpt-4o"),
                 messages=[{"role": "user", "content": length_retry_prompt}],
-                temperature=0.7,
+                temperature=0.0,
                 max_tokens=800
             )
+            record_token_usage(length_retry_response, usage_log)
             candidate = length_retry_response.choices[0].message.content.strip()
             if _band9_word_count(candidate) > _band9_word_count(result):
                 result = candidate
@@ -990,6 +1052,26 @@ RELEVANCE_NOTICE_MESSAGES = {
     "partially_off_topic": "Your answer only partly addresses the topic of the question asked.",
 }
 
+# Static, non-GPT explanatory text for the "severity" tag attached to
+# mistakes throughout this report. Mistakes are shown so the candidate can
+# polish further, but the tag itself is the only signal for whether an
+# issue actually affected the band - without this, a candidate seeing
+# several "minor" tags has no way to know those did NOT lower their score.
+SEVERITY_LEGEND = {
+    "minor": (
+        "Occasional, non-systematic issues where meaning stayed clear and a listener would "
+        "understand effortlessly. These do NOT lower your band score - the official IELTS "
+        "descriptors allow this kind of imperfection even at the top bands (Band 9 explicitly "
+        "permits \"mistakes characteristic of native speaker speech\"; Band 8 allows "
+        "\"occasional inappropriacies/non-systematic errors\")."
+    ),
+    "significant": (
+        "The same type of issue recurring across the answer (systematic), or an issue that "
+        "actually changed or obscured meaning, or required real listener effort to understand. "
+        "These are the issues that genuinely affect your band score."
+    ),
+}
+
 _RELEVANCE_FEEDBACK_PREFIX = {
     "completely_off_topic": (
         "Your answer did not address the question that was asked - this is the main reason "
@@ -1001,6 +1083,264 @@ _RELEVANCE_FEEDBACK_PREFIX = {
         "make sure every part of your response stays focused on what's actually being asked. "
     ),
 }
+
+# Config flag for the minor/significant mistake split - default OFF. This is
+# a real, non-additive break to the "mistakes" array's contents (today it
+# holds every issue regardless of severity; flag ON narrows it to
+# significant/band-affecting only), so unlike the purely-additive fields
+# elsewhere in this file it must not change behaviour for any existing
+# caller until explicitly opted in. Does NOT affect how severity itself is
+# assigned - see _validate_question_mistakes / generate_mistakes for that;
+# this only routes an already-assigned severity tag to one of two places.
+SPEAKING_MISTAKE_SEVERITY_SPLIT = os.getenv("SPEAKING_MISTAKE_SEVERITY_SPLIT", "false").strip().lower() == "true"
+
+# Config flag for the WPM denominator fix - default OFF, same reasoning as
+# above: this changes what evidence generate_scores() sees for Fluency and
+# Coherence (see the pacing guidance text below), so it's a real behaviour
+# change, not a purely additive field. Flag OFF: "speech_rate_wpm" is
+# words / total clip duration INCLUDING silence, exactly as before - a
+# measured speaker's thinking pauses inflate their denominator and read as
+# slow, a nervous fast-talker's lack of pauses reads as fluent, entirely as
+# an artifact of the denominator rather than of anything the model judged.
+# Flag ON: "speech_rate_wpm" becomes words / voiced-only duration (from
+# librosa.effects.split, already computed for the pause-count/avg-pause-
+# duration features above - reused here, not newly computed). Either way,
+# both speech_rate_wpm_raw and speech_rate_wpm_voiced stay present on every
+# response (see extract_acoustic_features' voiced_duration_sec/
+# silence_fraction and the per-clip block below) so the gap is visible
+# regardless of which one is currently driving scoring evidence.
+SPEAKING_VOICED_WPM = os.getenv("SPEAKING_VOICED_WPM", "false").strip().lower() == "true"
+
+
+def _split_mistakes_by_severity(mistakes: list) -> tuple:
+    """Partition a per-question mistakes list (each item already carries a
+    resolved "minor"/"significant" severity - see _validate_question_
+    mistakes) into (significant, minor). Every item lands in exactly one of
+    the two lists; neither list's item shape changes."""
+    significant, minor = [], []
+    for item in mistakes or []:
+        if str(item.get("severity", "")).strip().lower() == "minor":
+            minor.append(item)
+        else:
+            significant.append(item)
+    return significant, minor
+
+
+def _split_part_feedback_by_severity(feedback: dict) -> tuple:
+    """Partition a part-level mistakes dict (4 criteria, each with its own
+    "{criterion}_severity" tag - see generate_mistakes) into (significant,
+    minor, praise_texts). significant/minor are dicts of the identical
+    4-criteria shape. A criterion whose severity is null is praise, not a
+    criticism (generate_mistakes' own docstring: "severity does not apply
+    to praise") - once mistakes/minor_observations both mean "something to
+    fix", a positive statement belongs in neither, so it is pulled out into
+    praise_texts (a list of strings) instead and both dicts get "" for that
+    criterion. The caller is responsible for routing praise_texts into
+    feedback_summary.strengths - the natural existing home for genuine,
+    specific positive callouts (see generate_feedback_summary)."""
+    significant, minor, praise_texts = {}, {}, []
+    for criterion in ("fluency", "grammar", "vocabulary", "pronunciation"):
+        text = feedback.get(criterion, "")
+        severity = feedback.get(f"{criterion}_severity")
+        sev_key = f"{criterion}_severity"
+        if str(severity).strip().lower() == "minor":
+            minor[criterion] = text
+            minor[sev_key] = severity
+            significant[criterion] = ""
+            significant[sev_key] = None
+        elif severity is None:
+            if str(text).strip():
+                praise_texts.append(str(text).strip())
+            significant[criterion] = ""
+            significant[sev_key] = None
+            minor[criterion] = ""
+            minor[sev_key] = None
+        else:
+            significant[criterion] = text
+            significant[sev_key] = severity
+            minor[criterion] = ""
+            minor[sev_key] = None
+    return significant, minor, praise_texts
+
+
+# --- Deterministic (non-GPT) word-repetition detection -------------------
+#
+# "Models count badly" - occurrence counting and rate thresholding are done
+# entirely in Python. GPT is used (see _REPETITION_ALTERNATIVES / its
+# generic fallback below) only for the free-text "alternatives" suggestion
+# text, never for deciding what counts as repeated.
+
+_REPETITION_STOPWORDS = {
+    "the", "a", "is", "are", "was", "i", "you", "it", "and", "but", "so", "to",
+    "of", "in", "that", "this", "have", "do", "go", "get", "very", "really",
+    "like", "think", "know", "because", "would", "will", "can",
+}
+
+# Fillers/discourse markers - explicitly out of scope per the spec's own
+# DO-NOT list ("never flag fillers/discourse markers here"), but not all
+# covered by the stopword list above (which was given verbatim). Added as a
+# judgment call, flagged for confirmation rather than silently assumed.
+_REPETITION_FILLER_WORDS = {
+    "um", "uh", "erm", "actually", "basically", "well", "okay", "yeah", "right",
+}
+
+_REPETITION_MIN_WORD_LEN = 4
+
+# PROVISIONAL - not yet calibrated against real data (no persisted
+# transcripts exist anywhere in this system to calibrate against - see the
+# no-persistence finding reported alongside this feature). These numbers
+# are a placeholder only so the mechanism is complete and testable - they
+# must not be treated as confirmed/final, and the flag stays OFF until they
+# are. Because this whole feature sits behind SPEAKING_MISTAKE_SEVERITY_
+# SPLIT (default OFF), shipping with a provisional threshold has zero
+# effect on any live output until the flag is deliberately switched on.
+_REPETITION_MIN_RATE_PER_100 = 2.5
+_REPETITION_MIN_ABSOLUTE_COUNT = 3
+
+# Backstop for a genuinely short whole test (e.g. an early-terminated
+# attempt) - below this many total words, any rate_per_100 is too unstable
+# to mean anything (a single repeat in a 20-word test is already 5/100),
+# so repetition detection is skipped entirely rather than risk a noisy
+# flag. Also provisional - same reasoning as the two constants above.
+_REPETITION_MIN_TOTAL_WORDS = 40
+
+# A small static table for the most commonly overused words in IELTS
+# speaking answers - deliberately not a GPT call (this task's own two
+# additions are both meant to be cheap/deterministic; a per-word GPT call
+# for alternatives would be a third, unrequested addition). Anything not in
+# this table gets a generic fallback line instead of no suggestion at all.
+_REPETITION_ALTERNATIVES = {
+    "nice": ["pleasant", "enjoyable", "appealing"],
+    "good": ["beneficial", "valuable", "worthwhile"],
+    "bad": ["poor", "unpleasant", "problematic"],
+    "big": ["large", "significant", "considerable"],
+    "small": ["minor", "modest", "limited"],
+    "happy": ["pleased", "delighted", "content"],
+    "interesting": ["engaging", "fascinating", "compelling"],
+    "important": ["significant", "crucial", "essential"],
+    "thing": ["aspect", "factor", "element"],
+    "things": ["aspects", "factors", "elements"],
+    "people": ["individuals", "others", "the public"],
+    "said": ["mentioned", "explained", "noted"],
+    "went": ["headed", "travelled", "made my way"],
+    "lot": ["a great deal", "plenty", "a considerable amount"],
+    "stuff": ["items", "material", "belongings"],
+    "beautiful": ["stunning", "picturesque", "attractive"],
+    "difficult": ["challenging", "demanding", "tough"],
+    "easy": ["straightforward", "manageable", "simple"],
+    "helpful": ["useful", "supportive", "beneficial"],
+    "amazing": ["remarkable", "impressive", "outstanding"],
+    "place": ["location", "spot", "destination"],
+}
+_REPETITION_GENERIC_ALTERNATIVES = ["a synonym", "a more specific word", "a rephrased sentence"]
+
+
+def _simple_lemma(word: str) -> str:
+    """Crude plural/-ing/-ed folding, deliberately not a full lemmatiser
+    (per spec). Good enough to fold regular forms (walks/walking/walked ->
+    walk) for repetition counting; irregular forms are left as-is."""
+    w = word.lower()
+    if len(w) > 4 and w.endswith("ies"):
+        return w[:-3] + "y"
+    if len(w) > 5 and w.endswith("ing"):
+        stem = w[:-3]
+        if len(stem) > 2 and stem[-1] == stem[-2] and stem[-1] not in "aeiou":
+            return stem[:-1]
+        return stem
+    if len(w) > 4 and w.endswith("ed"):
+        stem = w[:-2]
+        if len(stem) > 2 and stem[-1] == stem[-2] and stem[-1] not in "aeiou":
+            return stem[:-1]
+        return stem
+    if len(w) > 4 and w.endswith("es"):
+        return w[:-2]
+    if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+        return w[:-1]
+    return w
+
+
+def _topic_words_from_question(question_text: str) -> set:
+    """Content words drawn from the question itself, lemma-folded the same
+    way as the repetition counter, so a candidate reusing the question's
+    own topic word (e.g. "hobby" in a question about hobbies) is never
+    flagged for it - that's staying on topic, not a limited vocabulary."""
+    words = re.findall(r"[a-zA-Z']+", (question_text or "").lower())
+    return {_simple_lemma(w) for w in words if len(w) > 2}
+
+
+def _collapse_immediate_repeats(text: str) -> str:
+    """Collapse an exact word immediately repeated (optionally with one
+    filler word between, e.g. "I I think" or "the the beach") down to a
+    single occurrence before counting. This is the mechanical, deterministic
+    slice of "never flag repetition inside a self-correction/repair": a
+    stumble-and-restart repeating the same word back-to-back should not
+    inflate that word's count. Non-adjacent repairs (a correction phrase in
+    between) are not caught here - a full self-correction-span analysis is
+    out of scope for a pure counting pass."""
+    return re.sub(r"\b(\w+)\b(?:\s+\w+\b)?\s+\1\b", r"\1", text, flags=re.IGNORECASE)
+
+
+def count_word_repetitions(answer_text: str, question_text: str = "") -> list:
+    """Deterministic repetition counter, run once across the WHOLE test's
+    pooled answers (not per part - see _REPETITION_MIN_TOTAL_WORDS below
+    and the module-level note on why: a single part, especially Part 1,
+    can be too short for a per-100-words rate to mean anything, and
+    over-reliance on a word is a candidate-wide trait, not a per-part one).
+    Returns [{word, count, rate_per_100}], sorted by count descending, for
+    words clearing BOTH the per-100-words rate threshold and the absolute
+    floor - or [] outright if the pooled text is below
+    _REPETITION_MIN_TOTAL_WORDS (too short for any rate to be meaningful).
+    Excludes the given stopword list, filler/discourse markers, and the
+    question's own topic words. Does not compute severity or touch scoring
+    - purely a counting/thresholding pass; the caller attaches alternatives
+    and decides where the result is shown."""
+    collapsed = _collapse_immediate_repeats(answer_text or "")
+    words = re.findall(r"[a-zA-Z']+", collapsed.lower())
+    total = len(words)
+    if total == 0 or total < _REPETITION_MIN_TOTAL_WORDS:
+        return []
+    topic_words = _topic_words_from_question(question_text)
+    counts = {}
+    for w in words:
+        if len(w) < _REPETITION_MIN_WORD_LEN:
+            continue
+        if w in _REPETITION_STOPWORDS or w in _REPETITION_FILLER_WORDS:
+            continue
+        lemma = _simple_lemma(w)
+        if lemma in _REPETITION_STOPWORDS or lemma in _REPETITION_FILLER_WORDS:
+            continue
+        if lemma in topic_words or w in topic_words:
+            continue
+        counts[lemma] = counts.get(lemma, 0) + 1
+    results = []
+    for lemma, count in counts.items():
+        rate = (count / total) * 100
+        if count >= _REPETITION_MIN_ABSOLUTE_COUNT and rate >= _REPETITION_MIN_RATE_PER_100:
+            results.append({"word": lemma, "count": count, "rate_per_100": round(rate, 2)})
+    results.sort(key=lambda r: r["count"], reverse=True)
+    return results
+
+
+def _repeated_word_observations(answer_text: str, question_text: str = "") -> list:
+    """count_word_repetitions() plus 2-3 context-fit alternatives per word,
+    phrased usefully rather than as a scolding notice - shaped for direct
+    use as a minor_observations entry."""
+    observations = []
+    for item in count_word_repetitions(answer_text, question_text):
+        alternatives = _REPETITION_ALTERNATIVES.get(item["word"], _REPETITION_GENERIC_ALTERNATIVES)
+        observations.append({
+            "word": item["word"],
+            "count": item["count"],
+            "rate_per_100": item["rate_per_100"],
+            "alternatives": alternatives,
+            "note": (
+                f"You used \"{item['word']}\" {item['count']} times - try "
+                f"{', '.join(alternatives[:-1])} or {alternatives[-1]} for variety."
+            ) if len(alternatives) > 1 else (
+                f"You used \"{item['word']}\" {item['count']} times - try {alternatives[0]} for variety."
+            ),
+        })
+    return observations
 
 
 def _apply_relevance_to_feedback(feedback: dict, topic_relevance: str) -> dict:
@@ -1043,7 +1383,7 @@ def _apply_completeness_to_feedback(feedback: dict, completeness_notices: list) 
     return feedback
 
 
-def generate_ideal_band9_answer(part_number: int, questions: list) -> str:
+def generate_ideal_band9_answer(part_number: int, questions: list, usage_log=None) -> str:
     """Generate a Band 9 model answer directly from the question(s), ignoring
     the student's actual answer entirely. Used when the student's answer was
     off-topic - generate_band9_answer() "polishes" the student's own words,
@@ -1081,13 +1421,14 @@ RULES:
 Output only the numbered answers. No extra labels. No explanation."""
 
     try:
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=OPENAI_TIMEOUT_SECONDS)
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), base_url=os.environ.get("OPENAI_BASE_URL"), timeout=OPENAI_TIMEOUT_SECONDS)
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=os.environ.get("OPENAI_MODEL_OVERRIDE", "gpt-4o"),
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
+            temperature=0.0,
             max_tokens=800
         )
+        record_token_usage(response, usage_log)
         result = response.choices[0].message.content.strip()
         logging.warning(f"[IDEAL BAND9] part={part_number} words={len(result.split())}")
 
@@ -1100,11 +1441,12 @@ Output only the numbered answers. No extra labels. No explanation."""
                 "Do not summarize - develop each point with detail."
             )
             retry_response = client.chat.completions.create(
-                model="gpt-4o",
+                model=os.environ.get("OPENAI_MODEL_OVERRIDE", "gpt-4o"),
                 messages=[{"role": "user", "content": length_retry_prompt}],
-                temperature=0.7,
+                temperature=0.0,
                 max_tokens=800
             )
+            record_token_usage(retry_response, usage_log)
             candidate = retry_response.choices[0].message.content.strip()
             if _band9_word_count(candidate) > _band9_word_count(result):
                 result = candidate
@@ -1167,9 +1509,102 @@ Return only 2-3 short bullet-style suggestions.
 
 
 
+def generate_feedback_summary(part_number: int, combined_transcripts: str, usage_log=None) -> dict:
+    """Scannable, bulleted feedback for a part: genuine strengths, specific
+    areas to improve, and actionable tips - a report-card summary format,
+    distinct from (and additive to) the detailed per-criterion "mistakes"
+    text and the per-question mistake list elsewhere in this module."""
+    prompt = f"""You are an IELTS Speaking examiner writing a concise,
+scannable summary for a student, covering Part {part_number}.
+
+The student's answers in this part:
+
+{combined_transcripts}
+
+Write three short bulleted lists:
+- "strengths": 2-4 genuine, SPECIFIC things this candidate actually did
+  well, grounded in their actual words - not generic praise like "good
+  effort". If something is a real strength, name it and quote or reference
+  the specific part of their answer that shows it.
+- "areas_to_improve": 2-5 specific, evidence-based issues - each a short,
+  self-contained observation a student could act on (not a full paragraph).
+  Only include a genuine issue you can point to in their actual answer - it
+  is completely fine to return fewer items for a strong answer.
+- "tips": 3-5 short, actionable, practical pieces of advice for this
+  student specifically, based on what you saw in THIS answer - not generic
+  IELTS advice that could apply to anyone.
+
+DO NOT FLAG (CRITICAL - this is SPOKEN language, not writing): never
+mention punctuation, capitalization, or spelling - that is a transcription
+artifact, not something the candidate did. Never comment on whether an
+opinion is correct or well-reasoned - only the language is assessed. Never
+mention accent (you only have text, not audio). A natural, correctly-used
+idiom or informal expression is a STRENGTH (evidence for higher Lexical
+Resource), never something to list as an area to improve. A single
+self-correction or restart mid-sentence is normal, expected speech (the
+descriptors allow it even at Band 9) - never list it as an area to
+improve unless it happens so often it disrupts the whole answer. Talking
+around a word the candidate doesn't know (paraphrasing instead of using
+it) is a communication STRATEGY worth naming as a strength, not a
+vocabulary weakness. Contractions ("I'm", "don't", "it's") and trailing-
+off/ellipsis are normal features of natural spoken English, never an
+area to improve. Hedges and stance markers ("I believe", "I think",
+"I guess", "of course") are interchangeable and never need replacing by
+another hedge - do not list swapping one for another as an area to
+improve. Vague, informal connector phrases ("or anything", "or
+something", "and stuff") are normal casual speech, not vagueness to
+correct. A short, elliptical answer that directly answers the question
+(e.g. "I believe dogs.") is a complete, natural spoken answer, not an
+incomplete sentence - never list it as a fragment (a genuinely
+too-short answer is a completeness issue, already tracked separately via
+completeness_notice, not a language area to improve). Long, connected
+speech with no clear sentence breaks is a transcription artifact, not
+something to describe as "run-on sentences" or missing structure - if
+pacing/organization is genuinely weak, describe the actual disorganization
+in the ideas themselves, never the absence of written sentence
+boundaries.
+
+CONFIDENCE BAR: only name a strength or an area to improve if you are
+genuinely confident it's real, evidenced by their actual words - an empty
+or shorter list is better than a padded, generic-sounding one.
+
+Return ONLY this JSON object, no explanation, no markdown:
+{{
+  "strengths": ["specific strength 1", "specific strength 2"],
+  "areas_to_improve": ["specific issue 1", "specific issue 2"],
+  "tips": ["actionable tip 1", "actionable tip 2", "actionable tip 3"]
+}}"""
+
+    result = safe_gpt_call(prompt, fallback=None, caller=lambda p: call_gpt(p, usage_log=usage_log))
+
+    parsed = result if isinstance(result, dict) else None
+    if parsed is None and isinstance(result, str) and result.strip():
+        try:
+            clean = result.strip().replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(clean)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+
+    def _clean_list(value, min_items):
+        if not isinstance(value, list):
+            return []
+        items = [str(v).strip() for v in value if str(v).strip()]
+        return items if len(items) >= min_items else items
+
+    if isinstance(parsed, dict):
+        return {
+            "strengths": _clean_list(parsed.get("strengths"), 1),
+            "areas_to_improve": _clean_list(parsed.get("areas_to_improve"), 0),
+            "tips": _clean_list(parsed.get("tips"), 1),
+        }
+
+    return {"strengths": [], "areas_to_improve": [], "tips": []}
+
+
 def generate_mistakes(
     part_number: int,
-    combined_transcripts: str
+    combined_transcripts: str,
+    usage_log=None
 ) -> dict:
     prompt = f"""You are a strict IELTS Speaking examiner.
 
@@ -1187,33 +1622,109 @@ explain what is wrong and how to fix it.
 Return ONLY this JSON object, no explanation, no markdown:
 {{
   "fluency": "specific feedback with example from their answer",
+  "fluency_severity": "minor" or "significant" or null,
   "grammar": "specific feedback with example from their answer",
+  "grammar_severity": "minor" or "significant" or null,
   "vocabulary": "specific feedback with example from their answer",
+  "vocabulary_severity": "minor" or "significant" or null,
   "pronunciation": "one general, honest, text-grounded observation - not a fabricated claim about specific stress/intonation you didn't actually hear",
+  "pronunciation_severity": "minor" or "significant" or null,
   "improvement": "one specific actionable tip for THIS student based on their actual answers"
 }}
+
+SEVERITY CLASSIFICATION (per criterion, alongside its feedback text):
+Judge severity by FREQUENCY + SYSTEMATICITY + COMMUNICATION IMPACT, never by
+counting errors or applying a fixed deduction:
+- "minor": the issue is occasional and non-systematic, meaning stayed
+  completely clear, and a listener would understand effortlessly - e.g. one
+  tense slip, one article omission, one slightly awkward phrase used only
+  once. This is exactly the kind of imperfection the official descriptors
+  allow even at the top bands (Band 9 explicitly permits "mistakes
+  characteristic of native speaker speech"; Band 8 allows "occasional
+  inappropriacies/non-systematic errors").
+- "significant": the SAME type of issue recurs across the answer
+  (systematic), or it actually changes/obscures meaning, or the listener
+  would need real effort to understand what was meant.
+- null: the criterion's text above is praise, not a criticism (per the
+  CRITICAL RULES below, a genuinely strong criterion should get brief
+  praise, not a forced issue) - severity does not apply to praise.
+Do not default everything to "significant" to seem thorough, and do not
+default everything to "minor" to seem lenient.
 
 DO NOT FLAG (CRITICAL - this is SPOKEN language, not writing):
 This is a transcript of something the student SAID out loud, not something
 they wrote. Never flag, correct, or mention punctuation, capitalization, or
 spelling - any of that in this text is a transcription artifact added by
-automatic speech-to-text, not something the candidate did wrong.
+automatic speech-to-text, not something the candidate did wrong. Never
+flag contractions ("I'm", "don't", "it's") or trailing-off/ellipsis - both
+are normal, correct features of natural spoken English, not errors. Never
+describe the answer as containing "run-on sentences" or lacking sentence
+structure - speech has no sentences; the transcriber inserted whatever
+breaks appear in this text, so their absence is never a grammar or
+punctuation issue. A short, elliptical answer that directly answers the
+question (e.g. "I believe dogs.") is complete and natural, not a
+fragment. Hedges and stance markers ("I believe", "I think", "I guess",
+"of course") never need replacing by a different hedge - that is a
+preference, not an error. Vague, informal connector phrases ("or
+anything", "or something", "and stuff") are normal casual speech, not
+something to correct into a more formal phrase.
 
 WHAT NOT TO CRITIQUE (CRITICAL): never comment on whether an opinion is
 correct, sensible, or well-reasoned - there is no "correct" opinion in
 IELTS Speaking, only the language used to express it. Never penalize
 British vs American vocabulary/word choice. You only have text, never
-audio, so never claim to know or comment on the candidate's accent.
+audio, so never claim to know or comment on the candidate's accent. Never
+treat the candidate briefly asking the examiner to repeat or clarify a
+question as a fluency mistake - it's normal, permitted exam behavior.
+
+CONFIDENCE BAR (CRITICAL): a wrong "correction" is worse than a missed
+one. Before naming an error, ask whether a Band 9 native speaker would
+genuinely avoid it, or whether it just differs from your own phrasing
+preference. Restrictive "which" (standard British English), fixed idioms
+like "as far as X is concerned" (always takes "is", even with an "or"-
+joined subject), and regionally-common dictionary words (e.g. "telecast")
+are NOT errors - do not invent a correction for any of them. If not fully
+confident something is a genuine error, leave it out.
+
+IDIOMS AND INFORMAL EXPRESSIONS ARE NOT MISTAKES (CRITICAL): a natural,
+correctly-used idiom or informal expression (e.g. "chalk and cheese",
+"out of the box") is POSITIVE evidence for Lexical Resource - the
+descriptors name "less common and idiomatic items" as a real gate for
+Band 7+. Never "correct" one into a plainer/more formal phrase (e.g.
+"chalk and cheese" -> "very different", "out of the box" -> "unique") -
+that punishes the candidate for exactly the kind of language the higher
+bands reward. Only flag an idiom if it is genuinely misused, means
+something different from what the candidate intended, or is wrong-register
+for the context - never merely because a plainer alternative exists.
+
+SELF-CORRECTION AND CIRCUMLOCUTION ARE NOT MISTAKES (CRITICAL): a
+candidate self-correcting or restarting mid-sentence (e.g. "I go there
+every day... well, actually not every day") is normal, expected speech -
+the descriptors explicitly allow it even at Band 9. Never flag it as a
+fluency problem unless it happens so often it visibly disrupts the whole
+answer (a frequency judgment, not a one-off). Likewise, if the candidate
+talks around a word they don't know instead of using it (e.g. "keep
+putting things off" instead of "procrastinate"), that is a communication
+STRATEGY the descriptors credit, not something to flag under vocabulary.
 
 RULES:
-- fluency: comment on their use of fillers (yeah, you know,
-  kind of), sentence linking, hesitation patterns
+- fluency: only comment on filler use (yeah, you know, kind of) if it is
+  frequent/repeated enough to disrupt the flow - one or two natural
+  fillers in an answer is normal speech, not a fluency issue worth
+  flagging. Comment on sentence linking and hesitation patterns instead
+  when fillers themselves are not genuinely excessive.
 - grammar: quote a specific grammatical error they made
   and show the correction
   Example: 'You said "One of them are" — correct form
   is "One of them is" as the subject is singular.'
-- vocabulary: quote a specific basic word they used and
-  suggest a better alternative
+  Do not flag mixing past tense (for a one-time past action, e.g. "I
+  recently watched...") with present tense (for the enduring/general
+  nature of what was watched, e.g. "it's a reality show") - that split is
+  standard, correct English, not a tense error.
+- vocabulary: quote a specific IMPRECISE or WRONG word choice and suggest
+  a better alternative - never a word that is already correct just
+  because a fancier synonym exists, and never a deliberate paraphrase
+  used to work around a harder word (that is a strength, not a weakness).
   Example: 'Instead of "a lot of clubs" consider
   using "a wide array of clubs"'
 - pronunciation: this is TEXT ONLY - you have no audio, so do NOT claim to
@@ -1244,13 +1755,14 @@ Start your response with {{ and end with }}"""
 
     try:
         logging.warning(f"[MISTAKES CALLED] part={part_number}")
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=OPENAI_TIMEOUT_SECONDS)
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), base_url=os.environ.get("OPENAI_BASE_URL"), timeout=OPENAI_TIMEOUT_SECONDS)
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=os.environ.get("OPENAI_MODEL_OVERRIDE", "gpt-4o"),
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.4,
-            max_tokens=500
+            temperature=0.0,
+            max_tokens=600
         )
+        record_token_usage(response, usage_log)
         result = response.choices[0].message.content.strip()
         logging.warning(f"[MISTAKES RESULT] {result[:100]}")
         if result:
@@ -1260,6 +1772,21 @@ Start your response with {{ and end with }}"""
                 if all(k in parsed for k in [
                     "fluency", "grammar", "vocabulary", "pronunciation"
                 ]):
+                    # Deterministic backstop: don't trust GPT's severity
+                    # value on faith - a criterion with real critique text
+                    # must carry a valid "minor"/"significant" severity
+                    # (default to "significant", the safer direction, if
+                    # missing or garbled); a criterion GPT left empty/falsy
+                    # (no genuine issue - see CRITICAL RULES in the prompt)
+                    # correctly has no severity to apply at all.
+                    for criterion in ("fluency", "grammar", "vocabulary", "pronunciation"):
+                        severity_key = f"{criterion}_severity"
+                        has_real_text = bool(str(parsed.get(criterion, "")).strip())
+                        severity = parsed.get(severity_key)
+                        if not has_real_text:
+                            parsed[severity_key] = None
+                        elif severity not in ("minor", "significant"):
+                            parsed[severity_key] = "significant"
                     return parsed
             except (json.JSONDecodeError, ValueError):
                 pass
@@ -1268,19 +1795,52 @@ Start your response with {{ and end with }}"""
 
     return {
         "fluency": "Work on reducing filler words and improving idea linkage.",
+        "fluency_severity": "significant",
         "grammar": "Review subject-verb agreement and sentence variety.",
+        "grammar_severity": "significant",
         "vocabulary": "Replace basic words with more precise academic vocabulary.",
+        "vocabulary_severity": "significant",
         "pronunciation": "Focus on natural stress patterns and rhythm.",
+        "pronunciation_severity": "significant",
         "improvement": "Focus on expanding your answers with specific examples."
     }
 
 
 QUESTION_MISTAKES_FALLBACK = [
-    {"type": "fluency", "original": "", "corrected": "", "explanation": "Reduce hesitation and link ideas more clearly."},
-    {"type": "grammar", "original": "", "corrected": "", "explanation": "Review subject-verb agreement and sentence variety."},
-    {"type": "vocabulary", "original": "", "corrected": "", "explanation": "Replace basic words with more precise academic vocabulary."},
-    {"type": "pronunciation", "original": "", "corrected": "", "explanation": "Work on natural stress and rhythm in connected speech."},
+    {"type": "fluency", "original": "", "corrected": "", "explanation": "Reduce hesitation and link ideas more clearly.", "severity": "significant"},
+    {"type": "grammar", "original": "", "corrected": "", "explanation": "Review subject-verb agreement and sentence variety.", "severity": "significant"},
+    {"type": "vocabulary", "original": "", "corrected": "", "explanation": "Replace basic words with more precise academic vocabulary.", "severity": "significant"},
+    {"type": "pronunciation", "original": "", "corrected": "", "explanation": "Work on natural stress and rhythm in connected speech.", "severity": "significant"},
 ]
+
+
+_COMPLETENESS_SIGNAL_PATTERN = re.compile(
+    r"\b(why|because|explain|reason|when|how often|how long|how many|"
+    r"how much|where|who|which|what about)\b",
+    re.IGNORECASE,
+)
+
+
+def _question_expects_additional_content(question: str) -> bool:
+    """Heuristic backstop: does the question text itself actually ask for
+    more than one thing (a reason, a specific extra detail, or multiple
+    cue-card bullets)? Used to forcibly clear a completeness_notice GPT
+    returned when the question doesn't support it - the prompt already
+    instructs GPT not to invent unstated sub-parts, but that instruction
+    isn't reliably followed (observed real cases: a plain "Do you think
+    people spend too much time watching TV?" flagged for not covering
+    unrelated content nobody asked about). Uses \\b word boundaries, not
+    plain substring matching - "where" must not match inside "somewhere",
+    same class of bug as the "clear"-inside-"unclear" issue found earlier.
+    """
+    text = (question or "").strip()
+    if not text:
+        return False
+    if "|" in text:
+        return True  # explicit cue-card bullet separator
+    if text.count("?") > 1:
+        return True  # multiple distinct questions
+    return bool(_COMPLETENESS_SIGNAL_PATTERN.search(text))
 
 
 def _normalize_for_mistake_comparison(text: str) -> list:
@@ -1290,7 +1850,288 @@ def _normalize_for_mistake_comparison(text: str) -> list:
     return re.sub(r"[^\w\s]", "", text).lower().split()
 
 
-def _validate_question_mistakes(items) -> list:
+def _dedupe_part_level_text_against_question_mistakes(text: str, question_mistakes: list) -> str:
+    """Item C.2 - live output has reported the same error twice: once as a
+    specific, locatable per-question mistake, and again inside the
+    free-text part-level criterion summary produced by generate_mistakes()
+    (e.g. "a lot many things" and the "advantages ... is" agreement error
+    both appeared in both places). Keeps the per-question version, which
+    is specific and locatable; strips any SENTENCE from the part-level
+    prose whose normalized text contains a 3+-word flagged phrase
+    (original or corrected) already reported per-question, so the same
+    error isn't double-counted. Pure filter - never changes any score."""
+    if not text or not question_mistakes:
+        return text
+    flagged_phrases = []
+    for m in question_mistakes:
+        if not isinstance(m, dict):
+            continue
+        for key in ("original", "corrected"):
+            tokens = _normalize_for_mistake_comparison(m.get(key) or "")
+            if len(tokens) >= 3:
+                flagged_phrases.append(" ".join(tokens))
+    if not flagged_phrases:
+        return text
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    kept = [
+        s for s in sentences
+        if not any(phrase in " ".join(_normalize_for_mistake_comparison(s)) for phrase in flagged_phrases)
+    ]
+    return " ".join(kept).strip()
+
+
+# Explanation text citing any of these as the reason for a "mistake" means
+# the underlying justification is about punctuation/capitalization - a
+# transcription artifact, not a speaking error - even if the "original"/
+# "corrected" pair also happens to differ in real wording elsewhere. A pure
+# text-equality check alone misses this: GPT can bundle a genuine wording
+# fix together with an unwarranted punctuation nitpick in the same item, and
+# the explanation is the only reliable signal that punctuation was (at least
+# partly) the stated reason.
+# Covers punctuation AND capitalization/spelling - both are transcription
+# artifacts (added by speech-to-text, not something the candidate did),
+# never a genuine speaking error. A real observed case: systematic_errors
+# flagged "use of 'i' in lowercase" as a recurring VOCABULARY pattern
+# (occurrences: "i live in a house", "i would like to talk", ...) - this
+# keyword list already existed for per-question mistakes but was never
+# applied to detect_systematic_errors()'s validation at all, and didn't
+# cover "lowercase"/"uppercase" wording either.
+_PUNCTUATION_EXPLANATION_KEYWORDS = (
+    "comma", "commas", "full stop", "period", "punctuation",
+    "capital letter", "capitalization", "capitalisation",
+    "capitalize", "capitalise", "lowercase", "uppercase",
+    "spelling", "misspell", "misspelled", "misspelling",
+)
+
+
+# Explanation text citing any of these as the reason for a "mistake" means
+# the underlying justification is that the candidate self-corrected or
+# restarted mid-sentence. The official band descriptors explicitly list
+# this as NORMAL, EXPECTED speech from Band 6 up ("occasional repetition,
+# self-correction..."), and it is Band 9's OWN allowance ("only rare
+# repetition or self-correction") - not an error at all unless it happens
+# so often it becomes disruptive (a frequency judgment the checklist in
+# generate_scores() already makes correctly; a single flagged instance in
+# a per-question mistakes list is never that). Flagging a single instance
+# as a "mistake" would penalize a candidate for demonstrating exactly the
+# self-monitoring awareness the descriptors reward.
+_SELF_CORRECTION_EXPLANATION_KEYWORDS = (
+    "self-correct", "self correct", "corrected themselves", "correcting themselves",
+    "corrects themselves", "restarted the sentence", "restart the sentence",
+    "restarting the sentence", "changed their answer", "changed their mind mid",
+    "backtrack", "false start", "interrupting themselves", "interrupted themselves",
+    "rephrased mid-sentence", "rephrasing mid-sentence", "correct themselves",
+)
+
+# Speech-level self-correction markers - a candidate audibly catching and
+# fixing themselves mid-answer ("People like to enjoy, sorry, people like
+# to visit..."). Different from _SELF_CORRECTION_EXPLANATION_KEYWORDS
+# above, which scans GPT's own EXPLANATION text for an admission of this;
+# this checks the flagged "original" SPAN itself, catching the case where
+# GPT flags the self-correction as the "mistake" without ever admitting
+# that's what it is in the explanation.
+_SELF_CORRECTION_SPAN_MARKERS = ("sorry", "i mean", "no wait", "my mistake", "i meant", "my bad")
+
+
+def _flagged_span_contains_self_correction(original: str) -> bool:
+    """True if the flagged span itself is a self-correction: either it
+    contains an audible self-correction marker, or the same short phrase
+    appears twice in a row (the candidate restating themselves without a
+    marker word) - self-correction is a fluency POSITIVE per the official
+    descriptors (allowed even at Band 9), never a mistake to flag."""
+    tokens = _normalize_for_mistake_comparison(original)
+    text_norm = " ".join(tokens)
+    if any(marker in text_norm for marker in _SELF_CORRECTION_SPAN_MARKERS):
+        return True
+    for n in (3, 2):
+        if len(tokens) < n * 2:
+            continue
+        ngrams = [tuple(tokens[i:i + n]) for i in range(len(tokens) - n + 1)]
+        if len(ngrams) != len(set(ngrams)):
+            return True
+    return False
+
+# Explanation text conceding there's no genuine error means the "mistake"
+# shouldn't exist at all - GPT flagged something, then talked itself out
+# of it in its own justification, but still returned the item anyway.
+# Ported from evaluators/writing.py's _NO_GENUINE_ERROR_PHRASES (same
+# proven fix, same reasoning - "mistakes" is an array slot GPT fills
+# whether or not a real error exists, so a self-admission in the
+# explanation is a reliable signal to drop the item regardless of what
+# "type"/"severity" it was given), extended with additional phrasing
+# specific to how this file's own prompts describe borderline
+# non-errors ("does not affect meaning", "is acceptable", "minor
+# stylistic point", "can be written", "is also possible").
+_SPEAKING_NO_GENUINE_ERROR_PHRASES = (
+    "no error",
+    "not an error",
+    "not a genuine error",
+    "no correction needed",
+    "no correction is needed",
+    "does not need correction",
+    "doesn't need correction",
+    "not incorrect",
+    "original is acceptable",
+    "borderline but not",
+    "not necessary to correct",
+    "no need to correct",
+    "acceptable as is",
+    "acceptable and no correction",
+    "this is correct",
+    "is actually correct",
+    "is grammatically correct",
+    "already correct",
+    "does not affect meaning",
+    "is acceptable",
+    "minor stylistic point",
+    "can be written",
+    "is also possible",
+)
+
+
+# A demonstrated, RECURRING false positive on real test data (the exact
+# same sentence, three separate times, surviving a prompt-only fix AND a
+# first backstop attempt): a candidate correctly uses present tense to
+# describe the enduring/general nature of something they experienced in
+# the past ("I recently watched a show... the show's aim IS to test...")
+# and GPT flags this as a tense error, "correcting" it to past tense -
+# which is actively WRONG. "I watched a great show yesterday. It's about
+# a detective in Paris." is standard, correct English (past tense for the
+# one-time viewing, present tense for the show's ongoing nature).
+#
+# The first backstop attempt matched keywords in GPT's free-form
+# "explanation" text ("verb tense should remain consistent") - but GPT
+# phrased the SAME misjudgment a third way ("The tense should be past
+# tense to match 'recently watched'") that didn't match any keyword,
+# proving explanation-text matching is too fragile for this. This version
+# is structural instead: it looks at the actual token-level edit, not the
+# wording used to justify it, so it's immune to how GPT phrases the
+# explanation.
+_PRESENT_TO_PAST_TENSE_SWAPS = {
+    "is": "was", "are": "were", "am": "was", "does": "did", "has": "had",
+}
+
+# If the original clause is ALREADY anchored to one specific past moment
+# (e.g. "the weather is bad yesterday"), a present-tense verb there could
+# be a genuine error worth fixing - only suppress the false-positive
+# pattern when there's no such anchor, which is the demonstrated real case
+# (a general/ongoing truth about something, not tied to one past instant).
+_PAST_TIME_ANCHOR_PATTERN = re.compile(
+    r"\b(yesterday|last (night|week|month|year|time)|\bago\b|back then|"
+    r"at that (time|point|moment)|previously|that (day|time|year))\b",
+    re.IGNORECASE,
+)
+
+
+def _is_present_to_past_tense_consistency_correction(original: str, corrected: str) -> bool:
+    if _PAST_TIME_ANCHOR_PATTERN.search(original):
+        return False
+    orig_tokens = _normalize_for_mistake_comparison(original)
+    corr_tokens = _normalize_for_mistake_comparison(corrected)
+    if len(orig_tokens) != len(corr_tokens):
+        return False
+    diffs = [(o, c) for o, c in zip(orig_tokens, corr_tokens) if o != c]
+    if len(diffs) != 1:
+        return False
+    present, past = diffs[0]
+    return _PRESENT_TO_PAST_TENSE_SWAPS.get(present) == past
+
+
+def _is_only_which_that_swap(original: str, corrected: str) -> bool:
+    """Restrictive 'which' is standard, correct British English (IELTS
+    uses British conventions), not an error - it recurs across nearly
+    every test as a false-positive "mistake". If the ONLY difference
+    between original and corrected is swapping 'which' for 'that' (or vice
+    versa), this is a style preference being mislabeled as a mistake."""
+    def _placeholder(text):
+        tokens = _normalize_for_mistake_comparison(text)
+        return ["RELPRON" if t in ("which", "that") else t for t in tokens]
+    return _placeholder(original) == _placeholder(corrected)
+
+
+# Phrase pairs that are fully interchangeable in standard English - neither
+# side is more "correct" than the other, so a "correction" that only swaps
+# one for the other fixes nothing real. This is the same abstract bug
+# recurring under different specific words each time (which/that and "as
+# far as X is concerned" above are the same failure class with their own
+# dedicated checks, since they need structural handling that isn't just a
+# phrase pair): a real case flagged "because of a shortage of time" ->
+# "due to a shortage of time" as a grammar fix, then a SEPARATE real case
+# flagged "shortage of time" -> "lack of time" - even though "shortage of
+# time" is already named as a protected example in the CONFIDENCE BAR
+# prompt text, proving prompt instructions alone don't reliably prevent
+# this. Each new instance of this failure class gets added here as one
+# more pair, rather than a new one-off function, since the underlying
+# check is identical regardless of which specific words are involved.
+_INTERCHANGEABLE_PHRASE_PAIRS = (
+    ("because of", "due to"),
+    ("shortage of time", "lack of time"),
+)
+
+
+def _is_only_known_synonym_phrase_swap(original: str, corrected: str) -> bool:
+    def _placeholder(text):
+        replaced = text
+        for i, (a, b) in enumerate(_INTERCHANGEABLE_PHRASE_PAIRS):
+            token = f"SYNPHRASE{i}"
+            replaced = re.sub(rf"\b{re.escape(a)}\b", token, replaced, flags=re.IGNORECASE)
+            replaced = re.sub(rf"\b{re.escape(b)}\b", token, replaced, flags=re.IGNORECASE)
+        return _normalize_for_mistake_comparison(replaced)
+    return _placeholder(original) == _placeholder(corrected)
+
+
+_ARTICLES = ("a", "an", "the")
+
+
+def _is_single_missing_article_insertion(original: str, corrected: str) -> bool:
+    """A real observed case: a missing article ('a' before "career break")
+    was tagged "significant" - despite "a single dropped article" being
+    THIS FILE'S OWN named example of what "minor" means (see STEP 3 in
+    generate_question_mistakes() below). This isn't a case where the
+    minor/significant definition is unclear - it's the model failing to
+    apply its own rule. Rather than trust severity classification alone
+    for this one narrow, structurally-checkable pattern, detect it
+    directly: "corrected" has exactly one extra token versus "original",
+    and that one extra token is a/an/the, with every other token
+    unchanged and in the same order."""
+    orig_tokens = _normalize_for_mistake_comparison(original)
+    corr_tokens = _normalize_for_mistake_comparison(corrected)
+    if len(corr_tokens) != len(orig_tokens) + 1:
+        return False
+    for i in range(len(corr_tokens)):
+        if corr_tokens[i] not in _ARTICLES:
+            continue
+        if corr_tokens[:i] + corr_tokens[i + 1:] == orig_tokens:
+            return True
+    return False
+
+
+_AS_FAR_AS_CONCERNED_PATTERN = re.compile(r"\bas far as\b.+\b(is|are)\s+concerned\b", re.IGNORECASE)
+
+
+def _is_only_concerned_verb_swap(original: str, corrected: str) -> bool:
+    """'As far as X is concerned' is a fixed idiom that always takes 'is',
+    regardless of whether X is singular, plural, or an 'or'-joined
+    compound (which itself takes agreement with the nearer noun under
+    standard English rules) - 'are concerned' is not a valid alternative
+    here. A real observed failure: the model "corrected" a genuinely
+    correct 'is concerned' to 'are concerned', actively teaching wrong
+    grammar rather than a harmless nitpick."""
+    if not (_AS_FAR_AS_CONCERNED_PATTERN.search(original) and _AS_FAR_AS_CONCERNED_PATTERN.search(corrected)):
+        return False
+    def _placeholder(text):
+        tokens = _normalize_for_mistake_comparison(text)
+        return ["VERB" if t in ("is", "are") else t for t in tokens]
+    return _placeholder(original) == _placeholder(corrected)
+
+
+def _validate_question_mistakes(items, transcript: str = "") -> list:
+    """`transcript` is optional and defaults to "" - when omitted (as every
+    existing caller/test that validates hand-constructed mistake dicts
+    without a real transcript already does), the verbatim/exact-once check
+    below is simply skipped, so this stays fully backward compatible.
+    generate_question_mistakes() (the only production caller) always
+    passes the real transcript."""
     if not isinstance(items, list):
         return []
     valid = []
@@ -1303,6 +2144,16 @@ def _validate_question_mistakes(items) -> list:
         ):
             original = str(item.get("original", ""))
             corrected = str(item.get("corrected", ""))
+            # A hyphen has no acoustic reality in speech - "out-of-the-box"
+            # and "out of the box" sound identical spoken aloud, so any
+            # hyphen joining two words here is a written-typesetting
+            # artifact GPT defaulted to, never a genuine spoken-language
+            # fix. Strip it before any other check, regardless of what
+            # else the correction legitimately fixes, since "corrected"
+            # must model how something should be SAID, not typed.
+            corrected = re.sub(r"(?<=\w)-(?=\w)", " ", corrected)
+            corrected = re.sub(r"\s+", " ", corrected).strip()
+            explanation = str(item.get("explanation", ""))
             # This is a transcript of speech, not writing - punctuation and
             # capitalization are transcription artifacts, not something the
             # candidate did wrong. The prompt already instructs GPT not to
@@ -1311,16 +2162,131 @@ def _validate_question_mistakes(items) -> list:
             # "original" and "corrected" is punctuation/case, discard it.
             if _normalize_for_mistake_comparison(original) == _normalize_for_mistake_comparison(corrected):
                 continue
+            # Also discard if punctuation/capitalization is cited as (part
+            # of) the reason, even when other genuine wording differs too -
+            # e.g. "adding a comma before 'but' improves the flow" bundled
+            # alongside an unrelated tense fix in the same item.
+            explanation_lower = explanation.lower()
+            if any(kw in explanation_lower for kw in _PUNCTUATION_EXPLANATION_KEYWORDS):
+                continue
+            # Self-correction/restarting mid-sentence is normal, expected
+            # speech per the official descriptors (even Band 9 allows "rare
+            # self-correction") - discard any item whose stated reason is
+            # that the candidate self-corrected, regardless of what the
+            # prompt-level instructions say, matching the punctuation
+            # backstop above.
+            if any(kw in explanation_lower for kw in _SELF_CORRECTION_EXPLANATION_KEYWORDS):
+                continue
+            # Item C.1 - same principle, checked on the flagged SPAN itself
+            # rather than GPT's explanation text: catches GPT flagging a
+            # self-correction as if it were the error, without ever
+            # admitting that's what it is in "explanation".
+            if _flagged_span_contains_self_correction(original):
+                continue
+            # A demonstrated, recurring false positive: present tense used
+            # to describe the ongoing/general nature of something
+            # experienced in the past (e.g. "the show's aim IS to test...")
+            # gets flagged as a tense-consistency error and "corrected" to
+            # past tense - actively wrong, since past-tense narration +
+            # present-tense description of the thing itself is standard
+            # English. Prompt-level guidance alone did not hold up against
+            # this on real test data, so it's discarded here regardless.
+            if _is_present_to_past_tense_consistency_correction(original, corrected):
+                continue
+            # Restrictive "which" is standard British English, not an
+            # error - and "as far as X is concerned" is a fixed idiom that
+            # always takes "is". Both were observed as confidently WRONG
+            # "corrections" (the second one actively teaches incorrect
+            # grammar), not just unhelpful nitpicks - discard regardless of
+            # what the prompt-level instructions say, since instruction-
+            # following on this class of subtle grammar judgment isn't
+            # reliable enough to trust alone.
+            if _is_only_which_that_swap(original, corrected):
+                continue
+            if _is_only_concerned_verb_swap(original, corrected):
+                continue
+            if _is_only_known_synonym_phrase_swap(original, corrected):
+                continue
+            # Per the official descriptors, a one-off slip (allowed even at
+            # Band 9: "mistakes characteristic of native speaker speech")
+            # doesn't cap the band the way a recurring/systematic issue
+            # does - default to "significant" if GPT omits or returns an
+            # unrecognized value, since that's the safer default (a
+            # candidate isn't shortchanged by an unlabeled issue being
+            # under-weighted).
+            severity = str(item.get("severity", "")).strip().lower()
+            if severity not in ("minor", "significant"):
+                severity = "significant"
+            # Deterministic override, not just a default: a single missing
+            # article is THIS FILE'S OWN canonical example of "minor" (see
+            # STEP 3 below) - force it regardless of what GPT's severity
+            # value says, the same way the backstops above override GPT's
+            # judgment on other narrow, structurally-checkable patterns.
+            if _is_single_missing_article_insertion(original, corrected):
+                severity = "minor"
+            # Verbatim + exact-once, when a real transcript is available -
+            # ported from evaluators/writing.py's
+            # _mistake_original_is_verbatim (the verbatim check: "original"
+            # must be an actual substring of what the candidate really
+            # said, or the mistake is a hallucination/paraphrase), plus an
+            # additional requirement this file didn't have before: "original"
+            # must be a multi-word span matching EXACTLY ONCE - a bare
+            # single word matches everywhere and tells the candidate
+            # nothing about which specific moment is meant, and a span that
+            # matches more than once is ambiguous for the same reason.
+            # Gated on `transcript` being supplied (see the docstring above)
+            # so this never changes behaviour for a caller that isn't
+            # validating against real speech.
+            if transcript:
+                if len(_normalize_for_mistake_comparison(original)) < 2:
+                    continue
+                if _quote_occurrence_count(original, transcript) != 1:
+                    continue
+            # Self-admission: the explanation itself concedes there's no
+            # genuine error, even though GPT still returned the item -
+            # ported from Writing's _NO_GENUINE_ERROR_PHRASES/
+            # _SPEAKING_NO_GENUINE_ERROR_PHRASES, same reasoning ("mistakes"
+            # is an array slot GPT fills whether or not a real error
+            # exists, so an explanation that talks itself out of the
+            # mistake is a reliable signal to drop it regardless of what
+            # type/severity it was given).
+            if any(kw in explanation_lower for kw in _SPEAKING_NO_GENUINE_ERROR_PHRASES):
+                continue
             valid.append({
                 "type": item.get("type"),
                 "original": original,
                 "corrected": corrected,
-                "explanation": str(item.get("explanation", "")),
+                "explanation": explanation,
+                "severity": severity,
             })
-    return valid
+
+    # Dedupe mistakes covering the same span - two items whose normalized
+    # "original" tokens are identical, or one is a contiguous run inside
+    # the other (not just a set-overlap, which would wrongly merge two
+    # unrelated mistakes that just happen to share an isolated common
+    # word), are the same underlying issue reported twice - occasionally
+    # once as e.g. "grammar" and once as "vocabulary". Keep the first
+    # (already-validated) occurrence, drop the rest.
+    def _is_contiguous_span_subset(shorter: list, longer: list) -> bool:
+        if len(shorter) > len(longer):
+            return False
+        for i in range(len(longer) - len(shorter) + 1):
+            if longer[i:i + len(shorter)] == shorter:
+                return True
+        return False
+
+    deduped = []
+    seen_spans = []
+    for item in valid:
+        span = _normalize_for_mistake_comparison(item["original"])
+        if any(_is_contiguous_span_subset(span, s) or _is_contiguous_span_subset(s, span) for s in seen_spans):
+            continue
+        seen_spans.append(span)
+        deduped.append(item)
+    return deduped
 
 
-def generate_question_mistakes(question: str, answer: str) -> dict:
+def generate_question_mistakes(question: str, answer: str, usage_log=None) -> dict:
     prompt = f"""You are a strict IELTS Speaking examiner.
 
 A student answered this question:
@@ -1370,6 +2336,31 @@ addresses it, not just one of them.
   every bullet, and real IELTS scoring does not penalize this. Only set a
   completeness_notice here if the response barely engages with the topic
   at all, not merely because one minor bullet point was skipped.
+- CRITICAL - CHECK FOR ECHOING: if the "answer" is mostly just the
+  candidate repeating or closely paraphrasing the question itself back
+  (a stalling tactic - "parroting the examiner's exact question... instead
+  of answering directly") rather than actually providing an answer, this
+  is NOT a complete response even if it superficially seems on-topic. Set
+  "completeness_notice" to something like "This mostly repeats the
+  question rather than answering it - no real answer was given." Judge
+  this by whether genuinely NEW content (an actual opinion, fact, or
+  detail not present in the question) was added, not by surface topic
+  overlap - naturally reusing a few words from the question while
+  answering it properly is completely normal and must NOT be flagged.
+- CRITICAL - READ THE WHOLE ANSWER FOR BURIED CONTENT: a reason/explanation
+  does NOT need to be clearly signposted (e.g. starting with "because") to
+  count as answered - spoken answers are often long, run-on, and full of
+  fillers, with the actual reason embedded in the middle rather than
+  clearly flagged. Read the ENTIRE answer carefully for any causal or
+  explanatory content (comparisons, consequences, "you can/don't have to
+  X", "that's why", etc.) before concluding a "why" was not addressed. A
+  real observed case: an answer explaining that streaming is flexible and
+  lets you watch "at any hour... at your convenience" unlike fixed TV
+  broadcast times DOES explain why streaming is more popular, even though
+  it never uses the word "because" and is delivered as one long rambling
+  sentence - flagging that as missing the "why" is wrong. Disorganized
+  delivery is a fluency/coherence issue to note separately in STEP 2, not
+  evidence that the content itself is missing.
 
 STEP 2 - IDENTIFY LANGUAGE ISSUES:
 Identify concrete issues in the student's answer covering these categories:
@@ -1388,10 +2379,132 @@ they wrote. Never flag, correct, or mention:
 - Sentence fragments that are only "wrong" in written-text terms (natural
   spoken English is full of run-ons, trailing clauses, and restarts that
   are completely normal in speech and are NOT grammar errors).
+- A short, elliptical answer that directly answers the question (e.g.
+  "I believe dogs.") - this is a complete, natural spoken answer, not an
+  incomplete sentence. A genuinely too-short answer is a completeness
+  issue, already tracked separately via completeness_notice, never a
+  language mistake here.
+- The candidate briefly asking the examiner to repeat or clarify a
+  question (e.g. "sorry, could you repeat that?") - this is normal,
+  permitted exam behavior in Parts 1 and 3, not a fluency or coherence
+  mistake.
+- Contractions ("I'm", "don't", "it's") or trailing-off/ellipsis - both
+  are normal, correct features of natural spoken English, not errors.
+- Hedges and stance markers ("I believe", "I think", "I guess", "of
+  course") - never flag one as needing replacement by a different hedge;
+  that is a preference, not an error.
+- Vague, informal connector phrases ("or anything", "or something", "and
+  stuff") - normal casual speech, never something to correct into a more
+  formal phrase just because it is vague or informal.
 Only flag issues a listener would actually notice when hearing the answer
 spoken aloud: wrong verb tense, subject-verb agreement, article/preposition
 errors, wrong word choice, awkward word order, filler words, imprecise
 vocabulary, and similar genuinely spoken-language issues.
+
+THE "corrected" FIELD MUST ALSO BE SPOKEN-STYLE, NOT WRITTEN-STYLE
+(CRITICAL): whatever you put in "corrected" models how the candidate
+should have SAID it, not how it should be typed. Never introduce hyphens
+to join compound modifiers (e.g. do not "correct" a spoken phrase into
+"out-of-the-box plots" - hyphenation is a written typesetting convention
+that has no spoken equivalent; "out of the box plots" is exactly how it
+would be said). Never add quotation marks, em dashes, semicolons, or any
+other punctuation a speaker cannot audibly produce. If the only thing
+your "corrected" version changes versus the original is adding this kind
+of written formatting, do not include the item at all.
+
+CONFIDENCE BAR (CRITICAL - a wrong "correction" is worse than a missed one):
+Before flagging anything, ask: would a Band 9 native speaker genuinely
+avoid this, or does it just differ from how YOU would phrase it? Only flag
+genuine errors, never a stylistic preference. Specific traps to avoid:
+- Restrictive "which" (e.g. "the activities which I enjoy") is standard,
+  correct British English - IELTS uses British conventions. Do not
+  "correct" it to "that".
+- Fixed idioms have fixed grammar that can look "wrong" out of context -
+  e.g. "as far as X is concerned" always takes "is", even when X is
+  plural or an "or"-joined compound (standard English agreement rule:
+  with "or", the verb agrees with the nearer noun). Do not "correct" this
+  to "are concerned" - that would be actively teaching wrong grammar, not
+  a helpful fix.
+- A word being regionally more common (e.g. "telecast", "shortage of
+  time") does not make it incorrect - only flag a word if it is genuinely
+  wrong or unclear, not because a different word is more common elsewhere.
+- Mixing past and present tense is NOT automatically an error: describing
+  a one-time past action in past tense ("I recently watched...") while
+  describing the enduring/general nature or purpose of what was watched
+  in present tense ("it's a reality show", "the show's aim is to test...")
+  is standard, correct English - the same pattern as "I read a great book
+  last week. It's about a detective in Paris." Only flag a tense issue
+  when the SAME event or fact is inconsistently described (e.g. switching
+  tense mid-sentence about one specific past occurrence), never for this
+  kind of correct past-event/general-truth split.
+- A word that is already correct and clear (e.g. "different", "good") is
+  NOT a vocabulary error just because a fancier synonym exists (e.g.
+  "distinct", "excellent") - only flag a word choice if it is actually
+  imprecise, unclear, or wrong for the context, never merely to suggest a
+  more advanced-sounding alternative to something that already works.
+- Never remove or change a word in a way that alters the candidate's
+  actual meaning (e.g. dropping "only" from "I only enjoy X" changes what
+  they said) - a correction must preserve their intended meaning exactly.
+- A natural, correctly-used idiom or informal expression (e.g. "chalk and
+  cheese", "out of the box") is POSITIVE evidence for Lexical Resource,
+  not an error - the descriptors name "less common and idiomatic items"
+  as a real gate for Band 7+. Never "correct" one into a plainer/more
+  formal phrase (e.g. "chalk and cheese" -> "very different"). Only flag
+  an idiom if it is genuinely misused or wrong-register for the context,
+  never merely because a plainer alternative exists.
+- Self-correcting or restarting mid-sentence (e.g. "I go there every
+  day... well, actually not every day, maybe three or four times a week")
+  is normal, expected speech - the descriptors explicitly allow it even at
+  Band 9 ("only rare repetition or self-correction"). Never flag a single
+  instance of this as a fluency mistake; it demonstrates self-monitoring,
+  not a language gap.
+- If the candidate visibly talks around a word they don't know instead of
+  using it (e.g. saying "keep putting things off" instead of
+  "procrastinate"), that is a genuine communication STRATEGY the
+  descriptors credit, not a vocabulary weakness - never flag it as
+  "should have used a more advanced word". Only flag vocabulary as an
+  issue when the word actually chosen is imprecise or wrong, not because
+  a harder word could theoretically have been used instead.
+If you are not fully confident something is a genuine error, do not
+include it - an empty or shorter mistakes array is always better than a
+confident-sounding but wrong correction.
+
+DO NOT OVER-APPLY THIS AND GO SILENT (CRITICAL): the confidence bar above
+exists to stop you from INVENTING a correction or flagging something that
+isn't actually wrong - it is NOT a reason to skip a genuine, real,
+correctly-identified minor issue just because it's small. A dropped
+article, a slightly informal phrase, one awkward word order - if it is
+GENUINELY there in the answer, report it and tag it "minor" (per STEP 3
+below); do not silently return an empty mistakes array just because
+nothing you found felt serious enough to mention. The candidate benefits
+from seeing real minor issues to polish, precisely BECAUSE tagging them
+"minor" already guarantees they won't be penalized for it - there is no
+reason to hide something real out of caution. Only leave "mistakes" empty
+when the answer genuinely has nothing worth pointing out at all.
+
+STEP 3 - CLASSIFY SEVERITY (CRITICAL):
+Per the official band descriptors, NOT every issue you flag actually caps
+the candidate's band. Band 9 itself explicitly allows "mistakes
+characteristic of native speaker speech" - real speakers make small slips
+without it affecting fluent, accurate speech. Judge severity by FREQUENCY
++ SYSTEMATICITY + COMMUNICATION IMPACT - never by counting errors or
+applying any fixed deduction. For EACH mistake, set "severity" to exactly
+one of:
+- "minor": a one-off slip that does not repeat elsewhere in the answer,
+  does not impede understanding, and is the kind of small imperfection
+  natural even in strong speech (e.g. a single dropped article, one
+  informal filler, one slightly awkward phrasing used only once). Minor
+  issues are worth mentioning so the candidate can polish further, but
+  they do NOT reflect a gap in the candidate's actual range or control,
+  and do NOT justify a lower band.
+- "significant": a recurring or systematic issue (the same type of error
+  happens more than once), an error that actually impedes understanding or
+  requires the listener to reinterpret what was meant, or one that reflects
+  a genuine gap in the candidate's grammatical/lexical range rather than a
+  slip. These are the issues that genuinely justify a lower band.
+Do not default everything to "significant" to seem thorough, and do not
+default everything to "minor" to seem lenient - classify each on its own
+merits using the definitions above.
 
 RESPONSE FORMAT (STRICT JSON, NO MARKDOWN):
 - Return ONLY a valid JSON object (no prose, no code fences).
@@ -1406,7 +2519,8 @@ RESPONSE FORMAT (STRICT JSON, NO MARKDOWN):
   return fewer items or even an empty array. Each
   object must have: "type" (fluency|grammar|vocabulary|pronunciation),
   "original" (exact text from the student's answer), "corrected" (the
-  improved version), "explanation" (why it matters, 1 sentence). Use
+  improved version), "explanation" (why it matters, 1 sentence),
+  "severity" ("minor" or "significant", per STEP 3 above). Use
   exact candidate wording in "original"; keep spacing/punctuation. For
   pronunciation, "original" should be the word/phrase likely
   mispronounced based on word choice and sentence complexity, and
@@ -1416,8 +2530,8 @@ RESPONSE FORMAT (STRICT JSON, NO MARKDOWN):
 Return ONLY this structure:
 {{
   "mistakes": [
-    {{"type": "grammar", "original": "", "corrected": "", "explanation": ""}},
-    {{"type": "vocabulary", "original": "", "corrected": "", "explanation": ""}}
+    {{"type": "grammar", "original": "", "corrected": "", "explanation": "", "severity": "significant"}},
+    {{"type": "vocabulary", "original": "", "corrected": "", "explanation": "", "severity": "minor"}}
   ],
   "completeness_notice": ""
 }}
@@ -1427,7 +2541,7 @@ Return ONLY this structure:
         response = safe_gpt_call(
             prompt,
             fallback=None,
-            caller=call_gpt,
+            caller=lambda p: call_gpt(p, usage_log=usage_log),
         )
         parsed = None
         if isinstance(response, dict):
@@ -1437,8 +2551,15 @@ Return ONLY this structure:
             parsed = json.loads(clean)
 
         if isinstance(parsed, dict):
-            mistakes = _validate_question_mistakes(parsed.get("mistakes"))
+            mistakes = _validate_question_mistakes(parsed.get("mistakes"), transcript=answer)
             notice = str(parsed.get("completeness_notice", "") or "").strip()
+            # Deterministic backstop: if the question itself doesn't
+            # actually ask for a reason/extra detail/multiple parts, force
+            # the notice to empty regardless of what GPT returned - see
+            # _question_expects_additional_content for why this can't be
+            # left to the prompt instruction alone.
+            if notice and not _question_expects_additional_content(question):
+                notice = ""
             # A successfully parsed response is authoritative even if it
             # found zero genuine issues - a strong answer can legitimately
             # have no real mistakes, and silently swapping that in for the
@@ -1523,9 +2644,19 @@ def _estimate_linguistic_floor(qas_clean: list) -> float:
     off-topic answers) - same lesson as topic-relevance detection itself:
     an instruction alone isn't enough, it needs a code-level backstop.
 
-    Returns a floor from 1.0 (trivial/no real answer) up to 4.5 (clearly
-    substantial, complex language). This is a MINIMUM, not a target - the
-    model's own score is still used whenever it's already at or above this.
+    Returns a WHOLE-NUMBER floor from 1.0 (trivial/no real answer) up to
+    5.0 (clearly substantial, complex language). This is a MINIMUM, not a
+    target - the model's own score is still used whenever it's already at
+    or above this. Must be a whole number: fluency/lexical/grammar are
+    whole-band-only values (per the conjunctive checklist in
+    generate_scores()), and this floor gets assigned directly into those
+    fields - a continuous float here (this used to return e.g. round(x, 1),
+    producing values like 3.1) would inject an invalid, non-band value
+    into an otherwise whole-number system. Rounds to the nearest whole
+    number (half-up, not Python's banker's-rounding default - same reason
+    as _ielts_round_half_up elsewhere in this file) rather than always
+    rounding up, so a genuinely trivial answer still floors near 1.0
+    rather than every off-topic answer being bumped an extra full band.
     """
     combined = " ".join(
         str(qa.get("user_answer", "")) for qa in (qas_clean or []) if qa.get("user_answer")
@@ -1548,7 +2679,13 @@ def _estimate_linguistic_floor(qas_clean: list) -> float:
     length_signal = min(1.0, word_count / 150)
     complexity_signal = min(1.0, avg_sentence_len / 20)
     subordinate_signal = min(1.0, subordinate_hits / 6)
-    diversity_signal = min(1.0, diversity / 0.55)
+    # Vocabulary diversity (unique/total) is only a meaningful signal once
+    # there are enough words to make repetition possible - a 3-word answer
+    # is trivially 100% "unique" and would otherwise look as diverse as a
+    # genuinely rich long answer. Scale down the diversity signal for short
+    # answers so trivial responses don't get credited with false diversity.
+    diversity_confidence = min(1.0, word_count / 20)
+    diversity_signal = min(1.0, diversity / 0.55) * diversity_confidence
 
     substantiality = (
         length_signal * 0.35
@@ -1557,7 +2694,7 @@ def _estimate_linguistic_floor(qas_clean: list) -> float:
         + diversity_signal * 0.15
     )
 
-    return round(1.0 + substantiality * 3.5, 1)
+    return float(math.floor(1.0 + substantiality * 3.5 + 0.5))
 
 
 def _aggregate_acoustic_pronunciation(raw_part_results: list) -> float | None:
@@ -1577,26 +2714,52 @@ def _aggregate_acoustic_pronunciation(raw_part_results: list) -> float | None:
 
 
 def _aggregate_speech_timing(raw_part_results: list) -> dict | None:
-    """Average speech_rate_wpm and sum duration_sec across every audio clip in
-    a part, so generate_scores() can weigh real pacing evidence (too slow /
+    """Average speech rate and sum duration across every audio clip in a
+    part, so generate_scores() can weigh real pacing evidence (too slow /
     too fast) instead of having zero access to timing data - mirrors
     _aggregate_acoustic_pronunciation() above. Returns None when no timing
-    data is available at all."""
-    wpm_values = []
+    data is available at all.
+
+    Both raw-duration and voiced-duration aggregates are always computed
+    (avg_wpm_raw/avg_wpm_voiced, total_duration_sec/total_voiced_duration_
+    sec, silence_fraction) regardless of SPEAKING_VOICED_WPM - "avg_wpm" is
+    the single field generate_scores() actually reads as the active pacing
+    number, and which underlying aggregate it points to is the only thing
+    the flag controls; wpm_basis tells generate_scores() which one it's
+    looking at so it can select the right prompt guidance (see below)."""
+    raw_wpm_values = []
+    voiced_wpm_values = []
     total_duration = 0.0
+    total_voiced_duration = 0.0
     for r in raw_part_results or []:
         audio_metrics = r.get("audio_metrics") or {}
-        wpm = audio_metrics.get("speech_rate_wpm")
-        if isinstance(wpm, (int, float)) and wpm > 0:
-            wpm_values.append(float(wpm))
+        raw_wpm = audio_metrics.get("speech_rate_wpm_raw")
+        if isinstance(raw_wpm, (int, float)) and raw_wpm > 0:
+            raw_wpm_values.append(float(raw_wpm))
+        voiced_wpm = audio_metrics.get("speech_rate_wpm_voiced")
+        if isinstance(voiced_wpm, (int, float)) and voiced_wpm > 0:
+            voiced_wpm_values.append(float(voiced_wpm))
         duration = audio_metrics.get("duration_sec")
         if isinstance(duration, (int, float)) and duration > 0:
             total_duration += float(duration)
-    if not wpm_values and total_duration <= 0:
+        voiced_duration = audio_metrics.get("voiced_duration_sec")
+        if isinstance(voiced_duration, (int, float)) and voiced_duration > 0:
+            total_voiced_duration += float(voiced_duration)
+    if not raw_wpm_values and not voiced_wpm_values and total_duration <= 0:
         return None
+    avg_wpm_raw = (sum(raw_wpm_values) / len(raw_wpm_values)) if raw_wpm_values else None
+    avg_wpm_voiced = (sum(voiced_wpm_values) / len(voiced_wpm_values)) if voiced_wpm_values else None
+    active_wpm = avg_wpm_voiced if (SPEAKING_VOICED_WPM and avg_wpm_voiced) else avg_wpm_raw
     return {
-        "avg_wpm": (sum(wpm_values) / len(wpm_values)) if wpm_values else None,
+        "avg_wpm": active_wpm,
+        "wpm_basis": "voiced" if (SPEAKING_VOICED_WPM and avg_wpm_voiced) else "raw",
+        "avg_wpm_raw": avg_wpm_raw,
+        "avg_wpm_voiced": avg_wpm_voiced,
         "total_duration_sec": round(total_duration, 1) if total_duration > 0 else None,
+        "total_voiced_duration_sec": round(total_voiced_duration, 1) if total_voiced_duration > 0 else None,
+        "silence_fraction": (
+            round(1 - (total_voiced_duration / total_duration), 4) if total_duration > 0 else None
+        ),
     }
 
 
@@ -1605,11 +2768,18 @@ def generate_scores(
     combined_transcripts: str,
     qas_clean: list | None = None,
     acoustic_pronunciation: float | None = None,
-    speech_timing: dict | None = None
+    speech_timing: dict | None = None,
+    usage_log=None
 ) -> dict:
     pacing_section = ""
     if speech_timing:
         avg_wpm = speech_timing.get("avg_wpm")
+        wpm_basis = speech_timing.get("wpm_basis", "raw")
+        # "Measured total spoken duration" intentionally stays tied to raw
+        # clip duration regardless of wpm_basis - it's answering "did the
+        # candidate fill their allotted time" (a clock-time budget
+        # question, e.g. Part 2's ~60s+ expectation), not a pacing-rate
+        # question, so it shouldn't move with the WPM denominator fix.
         total_duration = speech_timing.get("total_duration_sec")
         pacing_lines = []
         if avg_wpm:
@@ -1617,7 +2787,40 @@ def generate_scores(
         if total_duration:
             pacing_lines.append(f"- Measured total spoken duration for this part: {total_duration:.0f} seconds.")
         if pacing_lines:
-            pacing_section = "\n\nSPEECH PACING EVIDENCE (real measured data, weigh alongside the transcript):\n" + "\n".join(pacing_lines) + """
+            if wpm_basis == "voiced":
+                # SPEAKING_VOICED_WPM path: the old "under 100 / over 200"
+                # numbers below were calibrated against raw-clip-duration
+                # WPM, which runs systematically LOWER than voiced-only WPM
+                # (silence inflates the raw denominator). Reusing those same
+                # numbers here would silently mean something different than
+                # what they were written for - and there is no real
+                # candidate data yet to derive correct voiced-WPM numbers
+                # from (see the no-persistence finding this session
+                # surfaced). Rather than guess a replacement threshold,
+                # this drops the numeric anchors entirely for this path and
+                # asks for a qualitative judgment instead, until the eval
+                # log has enough real voiced-WPM data to recalibrate them
+                # properly.
+                pacing_section = "\n\nSPEECH PACING EVIDENCE (real measured data, weigh alongside the transcript):\n" + "\n".join(pacing_lines) + """
+- This measured rate excludes silence/pauses (voiced speaking time only) -
+  it is NOT directly comparable to generic "words per minute" benchmarks
+  you may know, which are usually based on total clock time including
+  pauses. Do not apply a specific numeric cutoff to it.
+- This is EVIDENCE to consider, not a separate score or override - use it to
+  inform Fluency and Coherence, not as a rule you mechanically apply.
+- Judge the rate qualitatively from the transcript and this number together:
+  a rate that feels unusually slow even for someone speaking without long
+  pauses is consistent with the effortful, hesitant pattern described at
+  Band 5 and below. A rate that feels unusually fast can indicate rhythm/
+  clarity breakdown rather than genuine fluency - do not reward raw speed by
+  itself.
+- For Part 2 specifically: a full long turn is normally expected to run
+  roughly 60 seconds or more. A markedly shorter duration limits how much
+  development, structure, and range the candidate had room to demonstrate -
+  factor this into the Answer Completeness assessment below (this is about
+  what evidence exists to judge, not a separate penalty)."""
+            else:
+                pacing_section = "\n\nSPEECH PACING EVIDENCE (real measured data, weigh alongside the transcript):\n" + "\n".join(pacing_lines) + """
 - This is EVIDENCE to consider, not a separate score or override - use it to
   inform Fluency and Coherence, not as a rule you mechanically apply.
 - A clearly slow rate (roughly under 100 WPM) sustained across the answer is
@@ -1640,15 +2843,25 @@ question asked and each "A:" is the student's answer to it:
 
 Score this student on THREE of the official IELTS criteria - Fluency and
 Coherence, Lexical Resource, and Grammatical Range and Accuracy - using the
-FULL band scale below. Do NOT score Pronunciation; that is assessed
-separately from real audio evidence, not from this text. Do not default to
-the middle of the range - use whatever band the evidence actually
-supports, including bands 8-9 for excellent performance and bands 1-3 for
-very poor performance.
+checklists below. Do NOT score Pronunciation; that is assessed separately
+from real audio evidence, not from this text.
 
-Bands available: 1.0 to 9.0 in 0.5 increments.
+HOW SCORING WORKS HERE (CRITICAL - read before scoring):
+Per the official descriptor sheet's own note: "A candidate must fully fit
+the positive features of the descriptor at a particular level." This is a
+conjunctive (AND) rule, not an average or overall impression. For each
+band listed below, you must judge whether EVERY feature listed for that
+band is met - true only if ALL of them hold, false if even one is missing.
+Do not average or "round up" - a candidate meeting 2 of band 7's 3 features
+is NOT a 7, they are whatever the highest band is where ALL features hold.
+Judge every band from 9 down to 1 independently and honestly - do not
+assume higher bands are false just because a lower one is true, and do not
+default to the middle of the range. Bands 8-9 should be marked true when
+genuinely earned, and bands 1-3 should be marked true when the evidence is
+that poor - do not hedge toward the middle out of caution.
 
-FLUENCY AND COHERENCE - explicitly assess ALL of these before scoring:
+FLUENCY AND COHERENCE - assessment guidance (use this to judge each
+feature below accurately):
 - Hesitation: is it content-related (thinking about ideas) or
   language-related (searching for words/grammar)? Language-related
   hesitation scores lower.
@@ -1675,29 +2888,38 @@ FLUENCY AND COHERENCE - explicitly assess ALL of these before scoring:
   fluency to justify a higher band.
 - Answer completeness: is the response fully developed with detail and
   examples, or does it stay superficial/underdeveloped?
-- 9: Fluent with only very occasional repetition/self-correction; any
-  hesitation is content-related, not a search for words or grammar; fully
-  develops topics coherently with fully appropriate cohesive features.
-- 8: Fluent with only occasional repetition/self-correction; hesitation is
-  usually content-related, rarely to search for language; topic
-  development is relevant, appropriate and coherent.
-- 7: Speaks at length without noticeable effort or loss of coherence; some
-  hesitation, repetition or self-correction; uses a range of connectives
-  and discourse markers with some flexibility.
-- 6: Willing to speak at length but may lose coherence at times due to
-  repetition, self-correction or hesitation; uses connectives and
-  discourse markers but not always appropriately.
-- 5: Usually maintains flow but relies on repetition, self-correction or
-  slow speech to keep going; may over-use certain connectives; simple
-  speech is fluent but more complex communication causes problems.
-- 4: Cannot keep going without noticeable pauses; slow speech with
-  frequent repetition; often self-corrects; links only simple sentences,
-  often repetitively; some breakdowns in coherence.
-- 3: Frequent, sometimes long, pauses; limited ability to link simple
-  sentences; gives only basic responses, cannot develop beyond that.
-- 2: Long pauses before nearly every word; isolated words may be
-  recognizable but speech has virtually no communicative significance.
-- 1: Speech is totally incoherent; no real communication possible.
+
+FLUENCY AND COHERENCE - band checklist (fluency_bands["N"] = true only if
+ALL features listed for band N hold):
+- Band 9: speaks fluently with only rare repetition or self-correction AND
+  any hesitation is content-related rather than to find words or grammar
+  AND speaks coherently with fully appropriate cohesive features AND
+  develops topics fully and appropriately.
+- Band 8: fluent with only occasional repetition or self-correction AND
+  hesitation is usually content-related and only rarely to search for
+  language AND topic development is coherent, appropriate and relevant.
+- Band 7: speaks at length without noticeable effort or loss of coherence
+  AND may demonstrate language-related hesitation at times, or some
+  repetition and/or self-correction AND uses a range of connectives and
+  discourse markers with some flexibility.
+- Band 6: is willing to speak at length, though may lose coherence at
+  times due to occasional repetition, self-correction or hesitation AND
+  uses a range of connectives and discourse markers but not always
+  appropriately.
+- Band 5: usually maintains flow of speech but uses repetition, self-
+  correction and/or slow speech to keep going AND may over-use certain
+  connectives and discourse markers AND produces simple speech fluently,
+  but more complex communication causes fluency problems.
+- Band 4: cannot respond without noticeable pauses and may speak slowly,
+  with frequent repetition and self-correction AND links basic sentences
+  but with repetitious use of simple connectives and some breakdowns in
+  coherence.
+- Band 3: speaks with long pauses AND has limited ability to link simple
+  sentences AND gives only simple responses and is frequently unable to
+  convey basic message.
+- Band 2: pauses lengthily before most words AND little communication
+  possible.
+- Band 1: no communication possible AND no rateable language.
 
 LEXICAL RESOURCE - explicitly assess ALL of these before scoring:
 - Repetition ratio: how often the same basic words/phrases are reused
@@ -1726,22 +2948,31 @@ LEXICAL RESOURCE - explicitly assess ALL of these before scoring:
   stiff, over-formal "book" language in a casual Part 1 answer, both signal
   weaker style awareness than vocabulary that's appropriately pitched to
   the part.
-- 9: Total flexibility and precise, natural use of vocabulary in all contexts.
-- 8: Wide vocabulary used fluently/flexibly for precise meaning; skilful
-  use of less common/idiomatic items despite occasional inaccuracy;
-  paraphrases effectively.
-- 7: Flexible vocabulary resource to discuss a variety of topics; some
-  less common/idiomatic vocabulary with some awareness of style and
-  collocation; paraphrases effectively.
-- 6: Vocabulary sufficient to discuss topics at length, meaning generally
-  clear despite inappropriacies; generally paraphrases successfully.
-- 5: Sufficient vocabulary for familiar and unfamiliar topics but limited
-  flexibility; attempts paraphrase, not always successful.
-- 4: Vocabulary sufficient for familiar topics only, meaning often
-  imprecise; rarely attempts paraphrase.
-- 3: Vocabulary resource limited, inadequate for unfamiliar topics.
-- 2: Very limited resource, essentially reduced to isolated words.
-- 1: No rateable vocabulary produced.
+
+LEXICAL RESOURCE - band checklist (lexical_bands["N"] = true only if ALL
+features listed for band N hold):
+- Band 9: uses vocabulary with full flexibility and precision in all
+  topics AND uses idiomatic language naturally and accurately.
+- Band 8: uses a wide vocabulary resource readily and flexibly to convey
+  precise meaning AND uses less common and idiomatic vocabulary skilfully,
+  with occasional inaccuracies AND uses paraphrase effectively as required.
+- Band 7: uses vocabulary resource flexibly to discuss a variety of topics
+  AND uses some less common and idiomatic vocabulary and shows some
+  awareness of style and collocation, with some inappropriate choices AND
+  uses paraphrase effectively.
+- Band 6: has a wide enough vocabulary to discuss topics at length and
+  make meaning clear in spite of inappropriacies AND generally paraphrases
+  successfully.
+- Band 5: manages to talk about familiar and unfamiliar topics but uses
+  vocabulary with limited flexibility AND attempts to use paraphrase but
+  with mixed success.
+- Band 4: is able to talk about familiar topics but can only convey basic
+  meaning on unfamiliar topics and makes frequent errors in word choice
+  AND rarely attempts paraphrase.
+- Band 3: uses simple vocabulary to convey personal information AND has
+  insufficient vocabulary for less familiar topics.
+- Band 2: only produces isolated words or memorised utterances.
+- Band 1: no communication possible AND no rateable language.
 
 GRAMMATICAL RANGE AND ACCURACY - this has TWO separate dimensions, both
 of which must be assessed together (a high score needs both range AND
@@ -1766,22 +2997,31 @@ accuracy, not just a low error count):
   persistent errors that keep an otherwise fluent, coherent candidate capped
   around Band 6 - weigh their frequency specifically, not just whether an
   error happened to occur somewhere.
-- 9: Full range of structures used naturally and appropriately;
-  consistently accurate apart from native-speaker-like slips.
-- 8: Wide range of structures used flexibly; majority of sentences
-  error-free; only occasional inappropriacies/non-systematic errors.
-- 7: Range of complex structures used with some flexibility; frequent
-  error-free sentences, though some mistakes persist.
-- 6: Mix of simple and complex structures but limited flexibility; errors
-  occur, especially in complex forms, but rarely impede communication.
-- 5: Basic sentence forms fairly well controlled; limited range of more
-  complex structures attempted, usually with errors, may need reformulation.
-- 4: Produces basic sentence forms and some correct simple sentences but
-  subordinate structures are rare; overall turns are short.
-- 3: Basic sentence forms attempted but grammatical errors are numerous
-  except in memorised utterances.
-- 2: No evidence of basic sentence forms.
-- 1: No rateable language produced.
+
+GRAMMATICAL RANGE AND ACCURACY - band checklist (grammar_bands["N"] = true
+only if ALL features listed for band N hold):
+- Band 9: uses a full range of structures naturally and appropriately AND
+  produces consistently accurate structures apart from "slips".
+- Band 8: uses a wide range of structures flexibly AND produces a majority
+  of error-free sentences with only very occasional inappropriacies or
+  basic/non-systematic errors.
+- Band 7: uses a range of complex structures with some flexibility AND
+  frequently produces error-free sentences, though some grammatical
+  mistakes persist.
+- Band 6: uses a mix of simple and complex structures, but with limited
+  flexibility AND may make frequent mistakes with complex structures,
+  though these rarely cause comprehension problems.
+- Band 5: produces basic sentence forms with reasonable accuracy AND uses
+  a limited range of more complex structures, but these usually contain
+  errors and may cause some comprehension problems.
+- Band 4: produces basic sentence forms and some correct simple sentences
+  but subordinate structures are rare AND errors are frequent and may lead
+  to misunderstanding.
+- Band 3: attempts basic sentence forms but with limited success, or
+  relies on apparently memorised utterances AND makes numerous errors
+  except in memorised expressions.
+- Band 2: cannot produce basic sentence forms.
+- Band 1: no communication possible AND no rateable language.
 
 Part-specific notes:
 - Part 1 answers are typically shorter - mark accordingly
@@ -1844,16 +3084,25 @@ WHAT NOT TO SCORE (CRITICAL - these must NEVER influence any score):
 - You are only given a text transcript here, never audio - so you have no
   way to judge accent, and must not infer or penalize one from spelling or
   word choice in the transcript.
+- If the transcript shows the candidate briefly asking the examiner to
+  repeat or clarify a question (e.g. "sorry, could you repeat that?"),
+  this is normal, permitted exam behavior in Parts 1 and 3 - do not treat
+  it as a hesitation, coherence, or fluency problem. Judge the candidate's
+  actual answer once given, not the fact that they asked for clarification.
 
-Return ONLY this JSON object, no explanation, no markdown:
+Return ONLY this JSON object, no explanation, no markdown. Each band key
+below is a STRING "1" through "9", and each value is a boolean - true only
+if EVERY feature listed for that band in the checklists above is met:
 {{
-  "fluency": 5.0,
-  "lexical": 5.0,
-  "grammar": 5.0,
+  "fluency_bands": {{"9": false, "8": false, "7": false, "6": false, "5": false, "4": false, "3": false, "2": false, "1": true}},
+  "lexical_bands": {{"9": false, "8": false, "7": false, "6": false, "5": false, "4": false, "3": false, "2": false, "1": true}},
+  "grammar_bands": {{"9": false, "8": false, "7": false, "6": false, "5": false, "4": false, "3": false, "2": false, "1": true}},
   "topic_relevance": "on_topic"
 }}
 
-Return only numeric values for the three scores. No strings there.
+The example above (all false except band 1) is only illustrating the
+SHAPE of the object, not a suggested answer - judge every band on its own
+merits per the checklists above.
 Return only the JSON object. No markdown.
 No ```json fence. No explanation before or after.
 Start your response with {{ and end with }}"""
@@ -1861,33 +3110,46 @@ Start your response with {{ and end with }}"""
     parsed = None
     try:
         logging.warning(f"[SCORES CALLED] part={part_number}")
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=OPENAI_TIMEOUT_SECONDS)
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"), base_url=os.environ.get("OPENAI_BASE_URL"), timeout=OPENAI_TIMEOUT_SECONDS)
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model=os.environ.get("OPENAI_MODEL_OVERRIDE", "gpt-4o"),
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.4,
-            max_tokens=800
+            temperature=0.0,
+            max_tokens=1200
         )
+        record_token_usage(response, usage_log)
         result = response.choices[0].message.content.strip()
         logging.warning(f"[SCORES RESULT] {result[:100]}")
         if result:
             clean = result.strip().replace("```json", "").replace("```", "").strip()
             candidate = json.loads(clean)
-            if all(k in candidate for k in ["fluency", "lexical", "grammar"]):
+            if all(k in candidate for k in ["fluency_bands", "lexical_bands", "grammar_bands"]):
                 parsed = candidate
     except Exception as e:
         logging.error(f"[MISTAKES/SCORES FAIL] {e}")
 
     if parsed is None:
-        parsed = {"fluency": 5.0, "lexical": 5.0, "grammar": 5.0, "topic_relevance": "on_topic"}
-
-    validated = {}
-    for k in ["fluency", "lexical", "grammar"]:
-        try:
-            score = float(parsed.get(k, 5.0))
-            validated[k] = score if 1.0 <= score <= 9.0 else 5.0
-        except (TypeError, ValueError):
-            validated[k] = 5.0
+        # GPT call failed or returned something unparseable - this is a
+        # system/infrastructure failure, not evidence the candidate produced
+        # "no rateable language". An empty band grid would floor through
+        # _highest_fully_met_band() to 1.0 for all three criteria, which
+        # would wrongly crash a real candidate's score to the bottom band
+        # just because of a transient API failure - use a neutral default
+        # instead, same as this function's fallback did before this change.
+        validated = {"fluency": 5.0, "lexical": 5.0, "grammar": 5.0}
+        parsed = {"topic_relevance": "on_topic"}
+    else:
+        # Deterministic band selection: the highest band where GPT marked
+        # EVERY feature of that band's checklist as met, per the descriptor
+        # sheet's own conjunctive rule ("must fully fit the positive
+        # features... at a particular level"). This is computed here in code
+        # rather than trusted as a single float GPT self-reports, for the
+        # same reason every other fix this session moved logic out of
+        # prompt-only instructions: GPT doesn't reliably self-apply a rule
+        # like this consistently on its own.
+        validated = {}
+        for key, bands_key in (("fluency", "fluency_bands"), ("lexical", "lexical_bands"), ("grammar", "grammar_bands")):
+            validated[key] = _highest_fully_met_band(parsed.get(bands_key) or {})
 
     topic_relevance = str(parsed.get("topic_relevance", "on_topic")).strip().lower()
     if topic_relevance not in ("on_topic", "partially_off_topic", "completely_off_topic"):
@@ -1945,6 +3207,20 @@ Start your response with {{ and end with }}"""
     return validated
 
 
+def _highest_fully_met_band(band_flags: dict) -> float:
+    """Deterministically pick the highest band (9 down to 1) where GPT
+    marked EVERY feature of that band's checklist as true. Implements the
+    descriptor sheet's own conjunctive rule ("a candidate must fully fit
+    the positive features of the descriptor at a particular level") in
+    code, rather than trusting GPT to self-apply that rule while also
+    self-reporting a single float - the same reasoning behind every other
+    deterministic backstop added this session."""
+    for band in (9, 8, 7, 6, 5, 4, 3, 2, 1):
+        if band_flags.get(str(band)) is True:
+            return float(band)
+    return 1.0
+
+
 def _ielts_round_half_up(x: float) -> float:
     """Official IELTS overall-band rounding: an average ending in .25 rounds
     UP to the next half band, and .75 rounds UP to the next whole band -
@@ -1954,6 +3230,347 @@ def _ielts_round_half_up(x: float) -> float:
     return math.floor(x * 2 + 0.5) / 2
 
 
+def _quote_occurrence_count(quote: str, transcript: str) -> int:
+    """Counts every verbatim occurrence of `quote` in `transcript` (modulo
+    whitespace/punctuation/case differences that don't change the actual
+    words - full punctuation stripping, so quote/dash style never matters
+    either). Used two ways: >0 means genuinely verbatim (not a paraphrase
+    or hallucination), and the exact count also lets a caller reject an
+    AMBIGUOUS quote that matches more than once - a candidate can't tell
+    which occurrence a mistake refers to if the quoted span isn't unique
+    in their own transcript. _quote_appears_in_transcript() below is a
+    thin backward-compatible wrapper around this for its one existing
+    caller (detect_systematic_errors()), which only ever needed a
+    yes/no answer."""
+    def _tokens(text):
+        return re.sub(r"[^\w\s]", "", (text or "")).lower().split()
+
+    quote_tokens = _tokens(quote)
+    transcript_tokens = _tokens(transcript)
+    if not quote_tokens:
+        return 0
+    span = len(quote_tokens)
+    count = 0
+    for i in range(len(transcript_tokens) - span + 1):
+        if transcript_tokens[i:i + span] == quote_tokens:
+            count += 1
+    return count
+
+
+def _quote_appears_in_transcript(quote: str, transcript: str) -> bool:
+    """Verify a claimed quoted occurrence is genuinely verbatim from the
+    transcript - the 3+-occurrence threshold in detect_systematic_errors()
+    is only a real evidentiary bar if the quotes it counts are real
+    quotes, not GPT's approximation of what the candidate said."""
+    return _quote_occurrence_count(quote, transcript) > 0
+
+
+def _pattern_key_terms(pattern: str) -> list:
+    """Extract the specific recurring word/phrase a systematic-error
+    pattern claims to be about, e.g. "use of 'having' in incorrect
+    contexts" -> ["having"]. The prompt requires this quoting so it can be
+    checked: a "pattern" is only as trustworthy as the shared mechanism it
+    names, and verbatim-quote-checking alone (see
+    _quote_appears_in_transcript) can't catch a real-but-unrelated quote
+    being counted toward a DIFFERENT pattern's occurrence count."""
+    return [q.lower().strip() for q in re.findall(r"['\"‘’]([^'\"‘’]+)['\"‘’]", pattern or "") if q.strip()]
+
+
+def detect_systematic_errors(whole_test_transcript: str, usage_log=None) -> list:
+    """Find error PATTERNS that recur across the WHOLE test (all 3 parts
+    together), not isolated per-part instances.
+
+    This exists because scoring runs as 3 independent per-part GPT calls,
+    each seeing only ~30-40% of the total evidence - none of them can ever
+    notice that the same underlying error (e.g. progressive aspect on a
+    stative verb: "which are having", "we were not having", "in case you
+    are having") recurs across Part 2 AND Part 3. That distinction matters
+    directly: Band 8 Grammatical Range and Accuracy explicitly requires
+    "only occasional inappropriacies/non-systematic errors" - a genuinely
+    systematic pattern is real, descriptor-grounded evidence capping GRA
+    (and, for repeated inappropriate word/collocation choices, Lexical
+    Resource) at Band 7, regardless of what each isolated per-part call
+    concluded on its own.
+    """
+    prompt = f"""You are an IELTS examiner reviewing a candidate's COMPLETE
+speaking test transcript (all three parts combined) for recurring error
+PATTERNS - not isolated one-off mistakes, but the same underlying error
+happening multiple times across the whole test.
+
+Full transcript (all parts):
+{whole_test_transcript}
+
+TASK: Identify error patterns that occur 3 OR MORE times across this
+transcript, where each occurrence is genuinely the SAME underlying error
+(the same grammatical structure misused, or the same word/phrase
+overused/misused), not merely superficially similar sentences.
+
+Examples of genuine systematic patterns (illustrative only, not the only
+valid kinds):
+- The same grammatical structure gets misused repeatedly, e.g. using
+  progressive aspect with a stative verb multiple times ("which are
+  having", "we were not having", "you are having" instead of "which
+  have", "we did not have", "you have").
+- The same word or phrase is used as an inappropriate filler/hedge
+  repeatedly in a way that becomes a collocation error or lexical
+  repetition pattern (e.g. "such kind of X" used many times instead of
+  "such X" or "this kind of X").
+
+Do NOT report something as systematic if:
+- It only happens 1-2 times (that's a one-off slip, not a pattern).
+- The occurrences are only superficially similar but are actually
+  different errors (e.g. two different tense mistakes that happen to both
+  be "wrong tense" is too vague - be specific about the actual shared
+  mechanism).
+- It's a stylistic preference (e.g. always using "very" as an intensifier)
+  rather than a genuine error.
+
+This is a transcript of SPOKEN language - do not flag punctuation,
+capitalization, or spelling as part of any pattern; those are
+transcription artifacts, not something the candidate did. This includes
+patterns like "the pronoun 'I' appears in lowercase" - a speaker cannot
+"say" a lowercase letter; any casing in this text was added by automatic
+speech-to-text, never something to report as a recurring error.
+
+Return ONLY this JSON object, no explanation, no markdown:
+{{
+  "systematic_errors": [
+    {{
+      "pattern": "short description of the specific recurring error mechanism, with the exact recurring word or phrase itself in single quotes, e.g. use of 'having' in incorrect contexts",
+      "criterion": "grammar",
+      "occurrences": ["exact quote 1 from the transcript", "exact quote 2", "exact quote 3"],
+      "explanation": "why this is a genuine recurring pattern, in 1 sentence"
+    }}
+  ]
+}}
+
+"criterion" must be exactly "grammar" or "vocabulary". The "pattern" field
+MUST name the specific recurring word or phrase in single quotes - every
+occurrence you list must actually contain that word/phrase (or an
+inflected form of it), not just be a different error that happens to feel
+similarly wrong. If there are genuinely no patterns meeting the 3+
+occurrence bar, return {{"systematic_errors": []}}. Do not invent patterns
+to fill the array - an empty array is a completely valid and expected
+answer for a candidate without recurring errors."""
+
+    result = safe_gpt_call(prompt, fallback=None, caller=lambda p: call_gpt(p, usage_log=usage_log))
+
+    parsed = result if isinstance(result, dict) else None
+    if parsed is None and isinstance(result, str) and result.strip():
+        try:
+            clean = result.strip().replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(clean)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+
+    if not isinstance(parsed, dict):
+        return []
+
+    raw_errors = parsed.get("systematic_errors")
+    if not isinstance(raw_errors, list):
+        return []
+
+    validated = []
+    for item in raw_errors:
+        if not isinstance(item, dict):
+            continue
+        criterion = str(item.get("criterion", "")).strip().lower()
+        if criterion not in ("grammar", "vocabulary"):
+            continue
+        occurrences = item.get("occurrences")
+        if not isinstance(occurrences, list):
+            continue
+        pattern = str(item.get("pattern", "")).strip()
+        if not pattern:
+            continue
+        explanation_text = str(item.get("explanation", "")).strip()
+        # This is a transcript of SPOKEN language - the prompt already says
+        # not to flag punctuation/capitalization/spelling as a pattern, but
+        # a real case slipped through anyway ("use of 'i' in lowercase"
+        # flagged as a recurring VOCABULARY pattern, capping Lexical
+        # Resource on a pure transcription artifact from automatic
+        # speech-to-text, not anything the candidate did). Check both
+        # "pattern" and "explanation" text, since either can carry the
+        # disqualifying signal.
+        pattern_and_explanation = f"{pattern} {explanation_text}".lower()
+        if any(kw in pattern_and_explanation for kw in _PUNCTUATION_EXPLANATION_KEYWORDS):
+            continue
+        # Deterministic backstop: don't trust a self-reported count/pattern
+        # claim on faith - require at least 3 occurrences that are actually
+        # verbatim (modulo punctuation/case) substrings of the real
+        # transcript, matching the 3+ threshold the prompt was given. GPT
+        # was asked to quote "exact quote[s]" but sometimes paraphrases a
+        # near-miss instead (e.g. swapping in a different noun from a
+        # nearby clause) - counting those toward the 3+ bar would let a
+        # pattern claim ride on partly-fabricated evidence.
+        occurrences = [str(o).strip() for o in occurrences if str(o).strip()]
+        occurrences = [o for o in occurrences if _quote_appears_in_transcript(o, whole_test_transcript)]
+        # Being a real quote isn't enough on its own - a real quote can
+        # still be a DIFFERENT error miscounted toward this pattern (a real
+        # observed case: a "having" misuse pattern included "they're not
+        # getting gaining", a genuine transcript quote but a completely
+        # unrelated double-verb error with no "having" in it at all). The
+        # prompt now requires "pattern" to name the specific recurring
+        # word/phrase in quotes - require every surviving occurrence to
+        # actually contain it (or leave the check off if the model didn't
+        # quote a key term, rather than reject everything on a formatting
+        # miss).
+        key_terms = _pattern_key_terms(pattern)
+        if key_terms:
+            occurrences = [
+                o for o in occurrences
+                if any(term in o.lower() for term in key_terms)
+            ]
+        if len(occurrences) < 3:
+            continue
+        validated.append({
+            "pattern": pattern,
+            "criterion": criterion,
+            "occurrences": occurrences,
+            "explanation": str(item.get("explanation", "")).strip(),
+        })
+    return validated
+
+
+def detect_answer_alignment_issues(part_1_qas: list, part_2_qas: list, part_3_qas: list) -> list:
+    """Diagnostic-only check for a bug class that lives outside this
+    backend: the audio-recording client can attach the wrong question's
+    label to a clip (e.g. a UI race where the displayed/stored question
+    advances before the previous answer's recording is finalized), so the
+    text this backend receives as "answer to question N" is actually what
+    the candidate said in response to a different question. This backend
+    has no way to detect that from the audio alone - it only ever sees
+    already-labeled (audio, question) pairs, and scoring, feedback, and
+    mistakes are all generated per that label - but when an answer's
+    content clearly, obviously matches a DIFFERENT question in the SAME
+    part, that's a strong same-part signal worth surfacing to whoever
+    reviews the report. This never rewrites the question/answer pairing or
+    touches scoring - there is no ground truth for the TRUE pairing here,
+    only a same-part candidate to point at.
+    """
+    parts = {1: part_1_qas or [], 2: part_2_qas or [], 3: part_3_qas or []}
+    entries_by_part = {}
+    sections = []
+    for part_no, qas in parts.items():
+        entries = [qa for qa in qas if qa.get("question") or qa.get("user_answer")]
+        entries_by_part[part_no] = entries
+        if len(entries) < 2:
+            continue
+        lines = [f"Part {part_no}:"]
+        for idx, qa in enumerate(entries):
+            lines.append(f"  [{idx}] Question: {qa.get('question', '')}")
+            lines.append(f"      Answer: {qa.get('user_answer', '')}")
+        sections.append("\n".join(lines))
+
+    if not sections:
+        return []
+
+    prompt = f"""You are reviewing an IELTS speaking test transcript for a
+DATA QUALITY issue, not a language issue: each answer below is labeled
+with the question it was recorded in response to, but a bug in the
+recording app can sometimes attach the WRONG question's label to an
+answer's audio clip.
+
+Two same-part questions are often about ADJACENT topics on purpose (e.g.
+"what makes a show popular" and "differences between what young and old
+people watch" both concern TV shows). An answer that merely happens to
+touch on a related topic is NOT a mismatch - most answers you see will be
+correctly labeled, including ones that share vocabulary or themes with a
+neighboring question.
+
+For EACH answer, apply this two-step test before ever flagging it:
+STEP 1 - Does this answer directly and reasonably respond to its OWN
+labeled question, even briefly or imperfectly? If yes, STOP - it is
+correctly labeled. Do NOT flag it, no matter how much its content also
+overlaps with another question's topic.
+STEP 2 - Only if the answer CLEARLY FAILS to address its own labeled
+question at all (e.g. it's a yes/no answer to a question that isn't a
+yes/no question, or it directly answers a different question's specific
+ask instead), check whether it instead directly answers a different
+question in the SAME part. Only flag it if swapping the two answers would
+make BOTH of them clearly better, more direct answers to their new
+(swapped) question than they currently are to their own labeled question.
+
+Never compare across different parts - Part 1/2/3 intentionally cover
+different topics and formats.
+
+{chr(10).join(sections)}
+
+Return ONLY this JSON object, no explanation, no markdown:
+{{
+  "alignment_warnings": [
+    {{"part": 3, "question_index": 1, "likely_matches_question_index": 0, "fails_own_question": true, "reason": "short reason citing specifically what the labeled question asks for that this answer never addresses, and what the other question asks for that it does address"}}
+  ]
+}}
+
+"fails_own_question" must be true for every item - if an answer does
+reasonably address its own question, do not include it at all. If every
+answer plausibly matches its own labeled question, return
+{{"alignment_warnings": []}} - this is the expected, normal result for
+most tests. Do not invent mismatches to fill the array."""
+
+    # gpt-4o-mini (call_gpt's model) was tested on real data and repeatedly,
+    # confidently mis-judged the exact same case even after the prompt was
+    # tightened with an explicit boolean commitment - this specific
+    # same-part semantic comparison needs a more capable model.
+    result = safe_gpt_call(prompt, fallback=None, caller=call_gpt_strong)
+
+    parsed = result if isinstance(result, dict) else None
+    if parsed is None and isinstance(result, str) and result.strip():
+        try:
+            clean = result.strip().replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(clean)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+
+    if not isinstance(parsed, dict):
+        return []
+
+    raw_warnings = parsed.get("alignment_warnings")
+    if not isinstance(raw_warnings, list):
+        return []
+
+    validated = []
+    for item in raw_warnings:
+        if not isinstance(item, dict):
+            continue
+        try:
+            part_no = int(item.get("part"))
+            q_idx = int(item.get("question_index"))
+            match_idx = int(item.get("likely_matches_question_index"))
+        except (TypeError, ValueError):
+            continue
+        if part_no not in entries_by_part:
+            continue
+        entries = entries_by_part[part_no]
+        if not (0 <= q_idx < len(entries)) or not (0 <= match_idx < len(entries)) or q_idx == match_idx:
+            continue
+        # Deterministic backstop: a soft "be conservative" instruction alone
+        # was not reliable in testing - a real case flagged an answer that
+        # fully, directly addressed its own labeled question just because it
+        # was topically adjacent to another question. Require the model to
+        # have explicitly committed to the stronger claim (its own question
+        # was NOT addressed at all) rather than accepting free-form prose
+        # that could rest on topical proximity alone.
+        if item.get("fails_own_question") is not True:
+            continue
+        reason = str(item.get("reason", "")).strip()
+        if not reason:
+            continue
+        validated.append({
+            "part": part_no,
+            "question": entries[q_idx].get("question", ""),
+            "labeled_answer_preview": (entries[q_idx].get("user_answer", "") or "")[:160],
+            "likely_actual_question": entries[match_idx].get("question", ""),
+            "note": (
+                "This answer appears to respond to a different question in this part. "
+                "Possible audio/question mislabeling during recording - review recommended."
+            ),
+            "reason": reason,
+        })
+    return validated
+
+
 def calculate_overall_band(
     part1_scores: dict,
     part2_scores: dict,
@@ -1961,13 +3578,10 @@ def calculate_overall_band(
 ) -> float:
     """Combine the three parts' criteria averages into one overall band.
 
-    The IELTS descriptors themselves don't define this step - a real exam
-    assigns one holistic band per criterion for the whole test rather than
-    scoring parts separately. Since this system DOES score per part (for
-    granular feedback), Part 2 (long turn) and Part 3 (discussion) are
-    weighted more heavily than Part 1 (small talk), reflecting standard
-    IELTS examiner guidance that later parts are more diagnostic of overall
-    ability - not a rule taken from the descriptor sheet itself.
+    Per the descriptor sheet's own note (ii): "A candidate will be rated
+    on their average performance across all parts of the test." Parts are
+    therefore weighted equally - not tiered by part, which was a previous
+    guess not actually supported by the descriptor sheet.
     """
 
     def _part_avg(scores):
@@ -1981,9 +3595,9 @@ def calculate_overall_band(
         ) / 4
 
     weighted_parts = [
-        (_part_avg(part1_scores), 0.25),
-        (_part_avg(part2_scores), 0.35),
-        (_part_avg(part3_scores), 0.40),
+        (_part_avg(part1_scores), 1.0),
+        (_part_avg(part2_scores), 1.0),
+        (_part_avg(part3_scores), 1.0),
     ]
     present = [(avg, weight) for avg, weight in weighted_parts if avg is not None]
 
@@ -2009,7 +3623,57 @@ def calculate_overall_band(
 
 
 
-def generate_vocabulary(part: int, combined_transcripts: str) -> list:
+_SPELLCHECKER = None
+_SPELLCHECKER_LOCK = threading.Lock()
+
+
+def _get_spellchecker():
+    global _SPELLCHECKER
+    if _SPELLCHECKER is None:
+        with _SPELLCHECKER_LOCK:
+            if _SPELLCHECKER is None:
+                from spellchecker import SpellChecker
+                _SPELLCHECKER = SpellChecker()
+    return _SPELLCHECKER
+
+
+def _filter_misspelled_vocab(vocab_list: list) -> list:
+    """Deterministically catch and drop spelling hallucinations in
+    GPT-generated vocabulary words (e.g. "envigorate" instead of
+    "invigorate") - a real English dictionary check, not tied to any
+    specific word list or topic, so this applies to every test, not just
+    the one that first exposed the bug.
+
+    Deliberately DROPS unrecognized words rather than auto-replacing them
+    with the dictionary's "closest" suggestion: tested against short/
+    modern terms that could plausibly come up across different topics
+    (wifi, covid, ielts), the suggested corrections were themselves wrong
+    and misleading ("wifi" -> "wife", "ielts" -> "belts", "covid" ->
+    "bovid") - silently teaching a wrong word would be worse than showing
+    one fewer vocabulary item. The existing "< 3 items -> fallback" logic
+    in generate_vocabulary() already covers the case where too many get
+    filtered out here."""
+    try:
+        spell = _get_spellchecker()
+    except Exception:
+        # If the spellchecker fails to load for any reason, don't let that
+        # break vocabulary generation entirely - just skip the check.
+        return vocab_list
+
+    kept = []
+    for item in vocab_list:
+        if not isinstance(item, dict) or not item.get("word"):
+            continue
+        word = str(item["word"])
+        tokens = [t for t in re.split(r"[ \-]", word) if t.isalpha()]
+        if not tokens or all(t.lower() in spell for t in tokens):
+            kept.append(item)
+        else:
+            logging.warning(f"[VOCAB SPELLING] Dropped unrecognized word: '{word}'")
+    return kept
+
+
+def generate_vocabulary(part: int, combined_transcripts: str, usage_log=None) -> list:
     fallbacks = {
         1: VOCAB_FALLBACK_PART1,
         2: VOCAB_FALLBACK_PART2,
@@ -2030,7 +3694,7 @@ questions on this topic:
 
 {combined_transcripts}
 
-Generate exactly 5 vocabulary words following these rules:
+Generate exactly 8 vocabulary words following these rules:
 
 RULE 1 — TOPIC SPECIFIC:
 Every word must be directly relevant to what the student
@@ -2065,31 +3729,65 @@ RULE 4 — USEFUL FOR IELTS SPEAKING:
 Every word must be something a student can realistically
 use in a speaking exam. No overly rare or obscure words.
 
-Return ONLY a JSON array. No markdown. No explanation.
-Start with [ and end with ]:
-[
-  {{"word": "example", "meaning": "clear simple explanation
-    of meaning in 1 sentence"}},
-  {{"word": "example2", "meaning": "clear simple explanation
-    of meaning in 1 sentence"}}
-]"""
+RULE 5 — CORRECT SPELLING (CRITICAL):
+Every word MUST be a real, standard, correctly-spelled English word.
+Double-check the spelling of each word before including it - do not
+invent or guess at a spelling (e.g. "envigorate" is not a word; the
+correct word is "invigorate").
 
-    result = safe_gpt_call(prompt, fallback=None)
+Return ONLY this JSON object. No markdown. No explanation:
+{{
+  "vocabulary": [
+    {{"word": "example", "meaning": "clear simple explanation of meaning in 1 sentence"}},
+    {{"word": "example2", "meaning": "clear simple explanation of meaning in 1 sentence"}}
+  ]
+}}"""
 
-    # handle case where result is already a list
-    if isinstance(result, list):
-        if len(result) >= 3:
-            return result[:5]
-        else:
-            return fallbacks.get(part, VOCAB_FALLBACK_PART1)
+    # NOTE: this used to ask for a bare JSON array and call safe_gpt_call()
+    # with no explicit `caller`, which defaults to utils.gpt_client.call_gpt
+    # - that function forces response_format={"type": "json_object"} on the
+    # OpenAI call, which REQUIRES the model to output a JSON object, not a
+    # bare array. That mismatch meant the result was never in a shape this
+    # function recognized (isinstance(result, list) was never true), so it
+    # silently fell through to the hardcoded fallback list on every single
+    # call, regardless of topic - confirmed by real test output repeatedly
+    # returning the exact same 5 words for every part across unrelated
+    # topics (parks, TV shows, etc). Now asks for an object wrapping the
+    # array, matching what the enforced response format actually requires.
+    result = safe_gpt_call(prompt, fallback=None, caller=lambda p: call_gpt(p, usage_log=usage_log))
 
-    # handle string result
+    def _extract_vocab_list(value):
+        # Don't slice to the final 5 here - the spelling filter below may
+        # drop some items, so keep every raw candidate available to filter
+        # from first, and slice only after filtering.
+        if isinstance(value, dict):
+            value = value.get("vocabulary")
+        if isinstance(value, list) and len(value) >= 3:
+            return value
+        return None
+
+    def _finalize(raw_list):
+        checked = _filter_misspelled_vocab(raw_list)
+        if len(checked) >= 3:
+            return checked[:8]
+        return None
+
+    extracted = _extract_vocab_list(result)
+    if extracted is not None:
+        finalized = _finalize(extracted)
+        if finalized is not None:
+            return finalized
+
+    # Defensive fallback: handle a string response (e.g. if the model still
+    # wraps the JSON in prose/fences despite the response_format constraint).
     if isinstance(result, str) and result.strip():
         try:
             clean = result.strip().replace("```json", "").replace("```", "").strip()
-            vocab_list = json.loads(clean)
-            if isinstance(vocab_list, list) and len(vocab_list) >= 3:
-                return vocab_list[:5]
+            extracted = _extract_vocab_list(json.loads(clean))
+            if extracted is not None:
+                finalized = _finalize(extracted)
+                if finalized is not None:
+                    return finalized
         except (json.JSONDecodeError, ValueError):
             pass
 
@@ -2185,7 +3883,7 @@ Do NOT include explanations or markdown."""
 
 # ------------------------------------------------------------
 
-def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question: str = None, questions: str = None, debug: bool = False):
+def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question: str = None, questions: str = None, debug: bool = False, usage_log=None):
 
     part_start = time.time()
 
@@ -2281,21 +3979,33 @@ def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question: str =
 
 
 
-    # Cap overly long audio to keep Whisper fast, and reject audio too
-    # short/near-empty to contain real speech BEFORE handing it to Whisper.
-    # Whisper's mel-spectrogram computation produces a zero-length feature
-    # tensor for near-silent/empty input, which crashes deep inside its
-    # decoding code with a cryptic tensor-reshape error rather than a clear
-    # message - catching it here up front gives a real, actionable error
-    # instead ("cannot reshape tensor of 0 elements...").
+    # Cap ABSURDLY long audio (guards against a malformed/runaway upload,
+    # not real exam answers - MAX_AUDIO_BYTES above already handles abuse
+    # prevention), and reject audio too short/near-empty to contain real
+    # speech BEFORE handing it to Whisper. Whisper's mel-spectrogram
+    # computation produces a zero-length feature tensor for near-silent/
+    # empty input, which crashes deep inside its decoding code with a
+    # cryptic tensor-reshape error rather than a clear message - catching
+    # it here up front gives a real, actionable error instead ("cannot
+    # reshape tensor of 0 elements...").
+    #
+    # This used to cap at 90 seconds "to keep Whisper fast" - but that
+    # silently truncated legitimate answers, not just abuse: official
+    # IELTS Part 2 gives candidates up to 2 minutes (120s) for the long
+    # turn, and this endpoint also combines multiple Part 3 questions into
+    # one recording, which can easily run several minutes total. A real
+    # candidate's answer trailing off mid-sentence in the transcript
+    # ("...so participants are also from") was this cap silently cutting
+    # off real content, not a transcription accuracy problem. Raised to a
+    # generous ceiling that only trims genuinely pathological uploads.
 
     try:
 
         dur_sec = _wav_duration_seconds(wav_path)
 
-        if dur_sec > 90:
+        if dur_sec > 300:
 
-            _trim_wav(wav_path, 90)
+            _trim_wav(wav_path, 300)
 
         if dur_sec < 0.3:
 
@@ -2419,13 +4129,26 @@ def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question: str =
 
 
 
-    # Speech rate
+    # Speech rate - both denominators always computed and exposed
+    # (speech_rate_wpm_raw / speech_rate_wpm_voiced), so the raw-vs-voiced
+    # gap stays visible regardless of SPEAKING_VOICED_WPM. speech_rate_wpm
+    # itself is the "active" field generate_scores() actually reads as
+    # pacing evidence - which denominator that means is controlled by the
+    # flag (see its definition above).
 
     words = len(transcript.split())
 
     duration = audio_metrics["duration_sec"]
 
-    audio_metrics["speech_rate_wpm"] = round((words / duration) * 60) if duration > 0 else 0
+    voiced_duration = audio_metrics.get("voiced_duration_sec") or 0.0
+
+    audio_metrics["speech_rate_wpm_raw"] = round((words / duration) * 60) if duration > 0 else 0
+
+    audio_metrics["speech_rate_wpm_voiced"] = round((words / voiced_duration) * 60) if voiced_duration > 0 else 0
+
+    audio_metrics["speech_rate_wpm"] = (
+        audio_metrics["speech_rate_wpm_voiced"] if SPEAKING_VOICED_WPM else audio_metrics["speech_rate_wpm_raw"]
+    )
 
 
 
@@ -2502,7 +4225,7 @@ def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question: str =
     if len(question_list) <= 1:
         answers = [transcript]
     else:
-        answers = split_transcript_with_gpt(transcript, question_list)
+        answers = split_transcript_with_gpt(transcript, question_list, usage_log=usage_log)
 
     if len(answers) != len(question_list):
 
@@ -2546,7 +4269,7 @@ def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question: str =
         # was one of the biggest contributors to overall latency.
         qa_result = {}
 
-        question_result = generate_question_mistakes(q, ans) if ans else {
+        question_result = generate_question_mistakes(q, ans, usage_log=usage_log) if ans else {
             "mistakes": [
                 {"type": "fluency", "original": "", "corrected": "", "explanation": "No answer to check."},
                 {"type": "grammar", "original": "", "corrected": "", "explanation": "No answer to check."},
@@ -2556,7 +4279,8 @@ def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question: str =
             "completeness_notice": "",
         }
 
-        evaluated_qas.append({
+        qa_mistakes_all = question_result.get("mistakes", [])
+        qa_entry = {
 
             "question": q,
 
@@ -2566,11 +4290,17 @@ def _evaluate_speaking_part_audio(audio_bytes: bytes, part: int, question: str =
 
             "result": qa_result,
 
-            "mistakes": question_result.get("mistakes", []),
+            "mistakes": qa_mistakes_all,
 
             "completeness_notice": question_result.get("completeness_notice", ""),
 
-        })
+        }
+        if SPEAKING_MISTAKE_SEVERITY_SPLIT:
+            qa_significant, qa_minor = _split_mistakes_by_severity(qa_mistakes_all)
+            qa_entry["mistakes"] = qa_significant
+            qa_entry["minor_observations"] = qa_minor
+
+        evaluated_qas.append(qa_entry)
 
 
 
@@ -2743,6 +4473,15 @@ async def evaluate_question_wise_audio(
             detail=f"Rate limit exceeded: max {_RATE_LIMIT_THRESHOLD} requests per {_RATE_LIMIT_WINDOW_SECONDS} seconds. Please try again shortly."
         )
 
+    # Accumulates real token usage (from the API's own usage metadata)
+    # across every LLM call made during this evaluation, including ones
+    # made concurrently across real OS threads via asyncio.to_thread()
+    # below - a plain list is used (not a counter) because list.append()
+    # is atomic under the GIL, so it's safe to mutate from multiple
+    # threads without a lock, unlike a shared running total which would
+    # need one. Summed into the response's "usage" field at the end.
+    usage_log = []
+
     audios = [
 
         audio_1, audio_2, audio_3, audio_4, audio_5,
@@ -2810,7 +4549,7 @@ async def evaluate_question_wise_audio(
     audio_byte_pairs = [(await audio_file.read(), question, part_no) for audio_file, question, part_no in filtered]
 
     part_results = await asyncio.gather(*[
-        asyncio.to_thread(_evaluate_speaking_part_audio, audio_bytes=audio_bytes, part=1, question=question)
+        asyncio.to_thread(_evaluate_speaking_part_audio, audio_bytes=audio_bytes, part=1, question=question, usage_log=usage_log)
         for audio_bytes, question, _ in audio_byte_pairs
     ])
 
@@ -2906,12 +4645,24 @@ async def evaluate_question_wise_audio(
                 if not answer_text:
                     answer_text = str(r.get("user_answer", "")).strip() or str(r.get("transcript", "")).strip()
                 if q_text or answer_text:
+                    mistakes_list = qa.get("mistakes", []) if isinstance(qa, dict) else []
                     item = {
                         "question": q_text,
                         "user_answer": answer_text,
-                        "mistakes": qa.get("mistakes", []) if isinstance(qa, dict) else [],
+                        # An empty list means "no mistakes found" - return
+                        # null instead of [] so it's an explicit signal
+                        # rather than something a consumer might mistake for
+                        # "mistakes weren't computed at all".
+                        "mistakes": mistakes_list if mistakes_list else None,
                         "completeness_notice": qa.get("completeness_notice", "") if isinstance(qa, dict) else "",
                     }
+                    # Only present at all when the severity-split flag was
+                    # on upstream (see evaluated_qas.append above) - keeps
+                    # this key fully absent, not just empty, when the flag
+                    # is off.
+                    if isinstance(qa, dict) and "minor_observations" in qa:
+                        minor_list = qa.get("minor_observations")
+                        item["minor_observations"] = minor_list if minor_list else None
                     if not answer_text and r.get("audio_error"):
                         item["audio_error"] = r.get("audio_error")
                         item["audio_error_message"] = r.get("audio_error_message")
@@ -2923,7 +4674,7 @@ async def evaluate_question_wise_audio(
         if not user_answer:
             user_answer = _extract_answer_from_text(r.get("transcript", ""))
         if q_text or user_answer:
-            item = {"question": q_text, "user_answer": user_answer, "mistakes": [], "completeness_notice": ""}
+            item = {"question": q_text, "user_answer": user_answer, "mistakes": None, "completeness_notice": ""}
             if not user_answer and r.get("audio_error"):
                 item["audio_error"] = r.get("audio_error")
                 item["audio_error_message"] = r.get("audio_error_message")
@@ -3065,21 +4816,48 @@ async def evaluate_question_wise_audio(
     async def _immediate(value):
         return value
 
-    # WAVE 1: vocabulary, scores, and mistakes for all 3 parts are fully
-    # independent of each other's results - none of these 9 GPT calls need
-    # anything the others produce. Run them all concurrently in a thread
-    # pool instead of one after another (this used to be ~9 sequential
-    # blocking calls; now it's bounded by the single slowest one).
-    vocab_part1, vocab_part2, vocab_part3, p1_scores, p2_scores, p3_scores, p1_feedback, p2_feedback, p3_feedback = await asyncio.gather(
-        asyncio.to_thread(generate_vocabulary, 1, p1_combined_transcripts) if p1_combined_transcripts else _immediate(VOCAB_FALLBACK_PART1),
-        asyncio.to_thread(generate_vocabulary, 2, p2_combined_transcripts) if p2_combined_transcripts else _immediate(VOCAB_FALLBACK_PART2),
-        asyncio.to_thread(generate_vocabulary, 3, p3_combined_transcripts) if p3_combined_transcripts else _immediate(VOCAB_FALLBACK_PART3),
-        asyncio.to_thread(generate_scores, 1, p1_feedback_text, part_1_qas_clean, p1_acoustic_pron, p1_speech_timing) if p1_feedback_text else _immediate(dict(_default_scores)),
-        asyncio.to_thread(generate_scores, 2, p2_feedback_text, part_2_qas_clean, p2_acoustic_pron, p2_speech_timing) if p2_feedback_text else _immediate(dict(_default_scores)),
-        asyncio.to_thread(generate_scores, 3, p3_feedback_text, part_3_qas_clean, p3_acoustic_pron, p3_speech_timing) if p3_feedback_text else _immediate(dict(_default_scores)),
-        asyncio.to_thread(generate_mistakes, 1, p1_feedback_text) if p1_feedback_text else _immediate({}),
-        asyncio.to_thread(generate_mistakes, 2, p2_feedback_text) if p2_feedback_text else _immediate({}),
-        asyncio.to_thread(generate_mistakes, 3, p3_feedback_text) if p3_feedback_text else _immediate({}),
+    # Whole-test transcript (all 3 parts together) for systematic-error
+    # detection - a pattern spanning multiple parts (e.g. the same
+    # grammatical error in both Part 2 and Part 3) is invisible to any of
+    # the per-part generate_scores()/generate_mistakes() calls below, since
+    # each only ever sees its own part's transcript.
+    whole_test_transcript = "\n\n".join(
+        f"=== PART {i} ===\n{text}"
+        for i, text in ((1, p1_feedback_text), (2, p2_feedback_text), (3, p3_feedback_text))
+        if text
+    )
+
+    # WAVE 1: vocabulary, scores, mistakes for all 3 parts, and whole-test
+    # systematic-error detection are fully independent of each other's
+    # results - none of these GPT calls need anything the others produce.
+    # Run them all concurrently in a thread pool instead of one after
+    # another (this used to be ~9 sequential blocking calls; now it's
+    # bounded by the single slowest one).
+    # detect_answer_alignment_issues() is deliberately NOT called here -
+    # across this session's real test reviews it produced 4 confirmed
+    # false positives against 1 confirmed true positive, even after
+    # tightening the prompt with a "fails_own_question" structural gate
+    # AND switching to gpt-4o via call_gpt_strong. The signal-to-noise
+    # ratio proved too poor for a "review recommended" flag to be
+    # trustworthy, and the root cause it targets (a client-side recording
+    # bug attaching the wrong question label to an audio clip) lives
+    # outside this repo anyway. Left defined below, tested, and easy to
+    # re-enable if a future model/approach actually fixes the reliability
+    # problem - just not spending a GPT call on it while it doesn't.
+    vocab_part1, vocab_part2, vocab_part3, p1_scores, p2_scores, p3_scores, p1_feedback, p2_feedback, p3_feedback, systematic_errors, p1_feedback_summary, p2_feedback_summary, p3_feedback_summary = await asyncio.gather(
+        asyncio.to_thread(generate_vocabulary, 1, p1_combined_transcripts, usage_log=usage_log) if p1_combined_transcripts else _immediate(VOCAB_FALLBACK_PART1),
+        asyncio.to_thread(generate_vocabulary, 2, p2_combined_transcripts, usage_log=usage_log) if p2_combined_transcripts else _immediate(VOCAB_FALLBACK_PART2),
+        asyncio.to_thread(generate_vocabulary, 3, p3_combined_transcripts, usage_log=usage_log) if p3_combined_transcripts else _immediate(VOCAB_FALLBACK_PART3),
+        asyncio.to_thread(generate_scores, 1, p1_feedback_text, part_1_qas_clean, p1_acoustic_pron, p1_speech_timing, usage_log=usage_log) if p1_feedback_text else _immediate(dict(_default_scores)),
+        asyncio.to_thread(generate_scores, 2, p2_feedback_text, part_2_qas_clean, p2_acoustic_pron, p2_speech_timing, usage_log=usage_log) if p2_feedback_text else _immediate(dict(_default_scores)),
+        asyncio.to_thread(generate_scores, 3, p3_feedback_text, part_3_qas_clean, p3_acoustic_pron, p3_speech_timing, usage_log=usage_log) if p3_feedback_text else _immediate(dict(_default_scores)),
+        asyncio.to_thread(generate_mistakes, 1, p1_feedback_text, usage_log=usage_log) if p1_feedback_text else _immediate({}),
+        asyncio.to_thread(generate_mistakes, 2, p2_feedback_text, usage_log=usage_log) if p2_feedback_text else _immediate({}),
+        asyncio.to_thread(generate_mistakes, 3, p3_feedback_text, usage_log=usage_log) if p3_feedback_text else _immediate({}),
+        asyncio.to_thread(detect_systematic_errors, whole_test_transcript, usage_log=usage_log) if whole_test_transcript else _immediate([]),
+        asyncio.to_thread(generate_feedback_summary, 1, p1_feedback_text, usage_log=usage_log) if p1_feedback_text else _immediate({"strengths": [], "areas_to_improve": [], "tips": []}),
+        asyncio.to_thread(generate_feedback_summary, 2, p2_feedback_text, usage_log=usage_log) if p2_feedback_text else _immediate({"strengths": [], "areas_to_improve": [], "tips": []}),
+        asyncio.to_thread(generate_feedback_summary, 3, p3_feedback_text, usage_log=usage_log) if p3_feedback_text else _immediate({"strengths": [], "areas_to_improve": [], "tips": []}),
     )
 
     p1_topic_relevance = p1_scores.pop("topic_relevance", "on_topic")
@@ -3089,6 +4867,25 @@ async def evaluate_question_wise_audio(
     p1_pronunciation_source = p1_scores.pop("pronunciation_source", "unavailable")
     p2_pronunciation_source = p2_scores.pop("pronunciation_source", "unavailable")
     p3_pronunciation_source = p3_scores.pop("pronunciation_source", "unavailable")
+
+    # Per the descriptor sheet: Band 8 Grammatical Range and Accuracy
+    # explicitly requires "only occasional inappropriacies/non-systematic
+    # errors". A genuinely systematic pattern (occurring 3+ times, verified
+    # in detect_systematic_errors) is real evidence that GRA cannot be
+    # Band 8+ for this test, regardless of what each per-part checklist
+    # concluded in isolation - so cap it here, after all 3 parts' scores
+    # are known, at the point where the whole-test evidence is available.
+    # The same "Repetition ratio... caps the band" feature already exists
+    # in the Lexical Resource checklist, so a systematic vocabulary/
+    # collocation pattern caps LR the same way.
+    if any(e["criterion"] == "grammar" for e in systematic_errors):
+        for scores in (p1_scores, p2_scores, p3_scores):
+            if scores.get("grammar", 0) > 7:
+                scores["grammar"] = 7.0
+    if any(e["criterion"] == "vocabulary" for e in systematic_errors):
+        for scores in (p1_scores, p2_scores, p3_scores):
+            if scores.get("lexical", 0) > 7:
+                scores["lexical"] = 7.0
 
     def _extract_questions(qas_clean):
         seen = []
@@ -3108,22 +4905,53 @@ async def evaluate_question_wise_audio(
     # fluent version of the WRONG topic; generate_ideal_band9_answer()
     # instead writes a fresh model answer straight from the question.
     band9_part1, band9_part2, band9_part3 = await asyncio.gather(
-        asyncio.to_thread(generate_ideal_band9_answer, 1, _extract_questions(part_1_qas_clean))
+        asyncio.to_thread(generate_ideal_band9_answer, 1, _extract_questions(part_1_qas_clean), usage_log=usage_log)
         if p1_topic_relevance in _OFF_TOPIC_TIERS
-        else (asyncio.to_thread(generate_band9_answer, 1, p1_combined_context, answers_only=p1_answers_only) if p1_combined_context else _immediate(p1_answers_only)),
+        else (asyncio.to_thread(generate_band9_answer, 1, p1_combined_context, answers_only=p1_answers_only, usage_log=usage_log) if p1_combined_context else _immediate(p1_answers_only)),
 
-        asyncio.to_thread(generate_ideal_band9_answer, 2, _extract_questions(part_2_qas_clean))
+        asyncio.to_thread(generate_ideal_band9_answer, 2, _extract_questions(part_2_qas_clean), usage_log=usage_log)
         if p2_topic_relevance in _OFF_TOPIC_TIERS
-        else (asyncio.to_thread(generate_band9_answer, 2, p2_combined_context, answers_only=p2_answers_only) if p2_combined_context else _immediate(p2_answers_only)),
+        else (asyncio.to_thread(generate_band9_answer, 2, p2_combined_context, answers_only=p2_answers_only, usage_log=usage_log) if p2_combined_context else _immediate(p2_answers_only)),
 
-        asyncio.to_thread(generate_ideal_band9_answer, 3, _extract_questions(part_3_qas_clean))
+        asyncio.to_thread(generate_ideal_band9_answer, 3, _extract_questions(part_3_qas_clean), usage_log=usage_log)
         if p3_topic_relevance in _OFF_TOPIC_TIERS
-        else (asyncio.to_thread(generate_band9_answer, 3, p3_combined_context, answers_only=p3_answers_only) if p3_combined_context else _immediate(p3_answers_only)),
+        else (asyncio.to_thread(generate_band9_answer, 3, p3_combined_context, answers_only=p3_answers_only, usage_log=usage_log) if p3_combined_context else _immediate(p3_answers_only)),
     )
+
+    # Attach a per-question refined/model answer alongside the combined
+    # band9_answer block, so each Q&A card in the report can show its own
+    # corrected version instead of only the whole-part text at the end.
+    _attach_refined_answers(part_1_qas_clean, band9_part1)
+    _attach_refined_answers(part_2_qas_clean, band9_part2)
+    _attach_refined_answers(part_3_qas_clean, band9_part3)
 
     p1_completeness_notices = _collect_completeness_notices(part_1_qas_clean)
     p2_completeness_notices = _collect_completeness_notices(part_2_qas_clean)
     p3_completeness_notices = _collect_completeness_notices(part_3_qas_clean)
+
+    # Item C.2 - drop any part-level criterion sentence that duplicates a
+    # specific error already reported per-question (see
+    # _dedupe_part_level_text_against_question_mistakes). Runs on the raw
+    # generate_mistakes() text, before the relevance/completeness notices
+    # below are appended, so it only ever touches GPT's own criterion
+    # prose, never text this module added itself.
+    def _collect_question_mistakes(qas_clean):
+        collected = []
+        for qa in qas_clean or []:
+            collected.extend(qa.get("mistakes") or [])
+        return collected
+
+    p1_question_mistakes = _collect_question_mistakes(part_1_qas_clean)
+    p2_question_mistakes = _collect_question_mistakes(part_2_qas_clean)
+    p3_question_mistakes = _collect_question_mistakes(part_3_qas_clean)
+    for feedback, question_mistakes in (
+        (p1_feedback, p1_question_mistakes),
+        (p2_feedback, p2_question_mistakes),
+        (p3_feedback, p3_question_mistakes),
+    ):
+        for key in ("fluency", "grammar", "vocabulary", "pronunciation"):
+            if feedback.get(key):
+                feedback[key] = _dedupe_part_level_text_against_question_mistakes(feedback[key], question_mistakes)
 
     p1_feedback = _apply_relevance_to_feedback(p1_feedback, p1_topic_relevance)
     p2_feedback = _apply_relevance_to_feedback(p2_feedback, p2_topic_relevance)
@@ -3133,20 +4961,82 @@ async def evaluate_question_wise_audio(
     p2_feedback = _apply_completeness_to_feedback(p2_feedback, p2_completeness_notices)
     p3_feedback = _apply_completeness_to_feedback(p3_feedback, p3_completeness_notices)
 
+    # Severity split (Part 1 of the minor/significant + repetition task) -
+    # behind SPEAKING_MISTAKE_SEVERITY_SPLIT, default OFF. p{N}_mistakes is
+    # byte-identical to the dict this file always built here when the flag
+    # is off; only the flag-on branch changes what "mistakes" contains and
+    # adds the new minor_observations dict (which also carries the
+    # deterministic word-repetition results - Part 2 of the same task).
+    p1_mistakes = {
+        "fluency": p1_feedback.get("fluency", ""),
+        "fluency_severity": p1_feedback.get("fluency_severity"),
+        "grammar": p1_feedback.get("grammar", ""),
+        "grammar_severity": p1_feedback.get("grammar_severity"),
+        "vocabulary": p1_feedback.get("vocabulary", ""),
+        "vocabulary_severity": p1_feedback.get("vocabulary_severity"),
+        "pronunciation": p1_feedback.get("pronunciation", ""),
+        "pronunciation_severity": p1_feedback.get("pronunciation_severity"),
+    }
+    p2_mistakes = {
+        "fluency": p2_feedback.get("fluency", ""),
+        "fluency_severity": p2_feedback.get("fluency_severity"),
+        "grammar": p2_feedback.get("grammar", ""),
+        "grammar_severity": p2_feedback.get("grammar_severity"),
+        "vocabulary": p2_feedback.get("vocabulary", ""),
+        "vocabulary_severity": p2_feedback.get("vocabulary_severity"),
+        "pronunciation": p2_feedback.get("pronunciation", ""),
+        "pronunciation_severity": p2_feedback.get("pronunciation_severity"),
+    }
+    p3_mistakes = {
+        "fluency": p3_feedback.get("fluency", ""),
+        "fluency_severity": p3_feedback.get("fluency_severity"),
+        "grammar": p3_feedback.get("grammar", ""),
+        "grammar_severity": p3_feedback.get("grammar_severity"),
+        "vocabulary": p3_feedback.get("vocabulary", ""),
+        "vocabulary_severity": p3_feedback.get("vocabulary_severity"),
+        "pronunciation": p3_feedback.get("pronunciation", ""),
+        "pronunciation_severity": p3_feedback.get("pronunciation_severity"),
+    }
+    p1_minor_observations = p2_minor_observations = p3_minor_observations = None
+    whole_test_repeated_words = []
+    if SPEAKING_MISTAKE_SEVERITY_SPLIT:
+        p1_mistakes, p1_minor_observations, p1_praise = _split_part_feedback_by_severity(p1_mistakes)
+        p2_mistakes, p2_minor_observations, p2_praise = _split_part_feedback_by_severity(p2_mistakes)
+        p3_mistakes, p3_minor_observations, p3_praise = _split_part_feedback_by_severity(p3_mistakes)
+        # Praise (severity: null) is neither a band-affecting problem nor a
+        # minor one - relocated to feedback_summary.strengths, the existing
+        # home for genuine positive callouts, rather than left sitting in
+        # either "fix this" array.
+        for feedback_summary, praise in (
+            (p1_feedback_summary, p1_praise),
+            (p2_feedback_summary, p2_praise),
+            (p3_feedback_summary, p3_praise),
+        ):
+            if praise and isinstance(feedback_summary, dict):
+                feedback_summary["strengths"] = list(feedback_summary.get("strengths") or []) + praise
+        # Repetition is pooled across the WHOLE TEST, not per part (see
+        # count_word_repetitions' docstring): Part 1's answers alone are
+        # often too short for a per-100-words rate to be stable, and
+        # over-reliance on a word is a candidate-wide habit, not something
+        # that resets at a part boundary. Topic words are pooled the same
+        # way, from all three parts' questions together.
+        whole_test_answers = "\n\n".join(filter(None, [p1_answers_only, p2_answers_only, p3_answers_only]))
+        whole_test_questions = " ".join(
+            _extract_questions(part_1_qas_clean) + _extract_questions(part_2_qas_clean) + _extract_questions(part_3_qas_clean)
+        )
+        whole_test_repeated_words = _repeated_word_observations(whole_test_answers, whole_test_questions)
+
     part_1 = {
 
         "questions": part_1_qas_clean,
 
         "scores": p1_scores,
 
-        "mistakes": {
-            "fluency": p1_feedback.get("fluency", ""),
-            "grammar": p1_feedback.get("grammar", ""),
-            "vocabulary": p1_feedback.get("vocabulary", ""),
-            "pronunciation": p1_feedback.get("pronunciation", "")
-        },
+        "mistakes": p1_mistakes,
 
         "improvement": p1_feedback.get("improvement", "Focus on expanding your answers with specific examples."),
+
+        "feedback_summary": p1_feedback_summary,
 
         "band9_answer": band9_part1,
 
@@ -3163,6 +5053,8 @@ async def evaluate_question_wise_audio(
         "not_attempted": p1_not_attempted,
 
     }
+    if SPEAKING_MISTAKE_SEVERITY_SPLIT:
+        part_1["minor_observations"] = p1_minor_observations
 
     part_2 = {
 
@@ -3170,14 +5062,11 @@ async def evaluate_question_wise_audio(
 
         "scores": p2_scores,
 
-        "mistakes": {
-            "fluency": p2_feedback.get("fluency", ""),
-            "grammar": p2_feedback.get("grammar", ""),
-            "vocabulary": p2_feedback.get("vocabulary", ""),
-            "pronunciation": p2_feedback.get("pronunciation", "")
-        },
+        "mistakes": p2_mistakes,
 
         "improvement": p2_feedback.get("improvement", "Focus on expanding your answers with specific examples."),
+
+        "feedback_summary": p2_feedback_summary,
 
         "band9_answer": band9_part2,
 
@@ -3194,6 +5083,8 @@ async def evaluate_question_wise_audio(
         "not_attempted": p2_not_attempted,
 
     }
+    if SPEAKING_MISTAKE_SEVERITY_SPLIT:
+        part_2["minor_observations"] = p2_minor_observations
 
     part_3 = {
 
@@ -3201,14 +5092,11 @@ async def evaluate_question_wise_audio(
 
         "scores": p3_scores,
 
-        "mistakes": {
-            "fluency": p3_feedback.get("fluency", ""),
-            "grammar": p3_feedback.get("grammar", ""),
-            "vocabulary": p3_feedback.get("vocabulary", ""),
-            "pronunciation": p3_feedback.get("pronunciation", "")
-        },
+        "mistakes": p3_mistakes,
 
         "improvement": p3_feedback.get("improvement", "Focus on expanding your answers with specific examples."),
+
+        "feedback_summary": p3_feedback_summary,
 
         "band9_answer": band9_part3,
 
@@ -3225,6 +5113,8 @@ async def evaluate_question_wise_audio(
         "not_attempted": p3_not_attempted,
 
     }
+    if SPEAKING_MISTAKE_SEVERITY_SPLIT:
+        part_3["minor_observations"] = p3_minor_observations
 
 
 
@@ -3242,9 +5132,36 @@ async def evaluate_question_wise_audio(
 
         "part_2": part_2,
 
-        "part_3": part_3
+        "part_3": part_3,
+
+        "systematic_errors": systematic_errors,
+
+        # Hardcoded empty rather than removed - detect_answer_alignment_
+        # issues() is disabled (see the comment above the Wave 1 gather
+        # call), but the key stays present so nothing consuming this
+        # response shape breaks on a missing field.
+        "alignment_warnings": [],
+
+        "severity_legend": SEVERITY_LEGEND,
 
     }
+
+    # Real LLM token usage for this evaluation, summed from every API
+    # call's own usage metadata (never estimated) - see usage_log above.
+    # Missing/malformed usage on any individual call was already handled
+    # inside record_token_usage() (that call simply contributes nothing),
+    # so this sum is always safe to compute even if some calls lacked it.
+    final_response["usage"] = {
+        "input_tokens": sum(u.get("input_tokens", 0) for u in usage_log),
+        "output_tokens": sum(u.get("output_tokens", 0) for u in usage_log),
+        "total_tokens": sum(u.get("total_tokens", 0) for u in usage_log),
+    }
+
+    # Whole-test word-repetition results (see the pooling note above) live
+    # at the top level, not inside any one part - absent entirely when the
+    # flag is off, same additive contract as part_N["minor_observations"].
+    if SPEAKING_MISTAKE_SEVERITY_SPLIT:
+        final_response["minor_observations"] = {"repeated_words": whole_test_repeated_words}
 
 
 
@@ -3256,6 +5173,35 @@ async def evaluate_question_wise_audio(
 
     })
 
-
+    # Per-clip raw AND voiced WPM, so the SPEAKING_VOICED_WPM prompt
+    # threshold (currently qualitative-only under the flag - see
+    # generate_scores()) can eventually be recalibrated from real usage
+    # instead of the synthetic audio this was validated against.
+    speech_timing_per_clip = [
+        {
+            "part": part_no,
+            "duration_sec": (r.get("audio_metrics") or {}).get("duration_sec"),
+            "voiced_duration_sec": (r.get("audio_metrics") or {}).get("voiced_duration_sec"),
+            "speech_rate_wpm_raw": (r.get("audio_metrics") or {}).get("speech_rate_wpm_raw"),
+            "speech_rate_wpm_voiced": (r.get("audio_metrics") or {}).get("speech_rate_wpm_voiced"),
+        }
+        for part_no, part_qas in ((1, part_1_qas), (2, part_2_qas), (3, part_3_qas))
+        for r in (part_qas or [])
+        if r.get("audio_metrics")
+    ]
+    log_evaluation({
+        "evaluator": "speaking",
+        "task_or_part": "full_test",
+        "question": _extract_questions(part_1_qas_clean) + _extract_questions(part_2_qas_clean) + _extract_questions(part_3_qas_clean),
+        "input_text": whole_test_transcript,
+        "response": final_response,
+        "model_default": "gpt-4o-mini",
+        "model_strong": "gpt-4o",
+        "flags": {
+            "SPEAKING_MISTAKE_SEVERITY_SPLIT": SPEAKING_MISTAKE_SEVERITY_SPLIT,
+            "SPEAKING_VOICED_WPM": SPEAKING_VOICED_WPM,
+        },
+        "speech_timing_per_clip": speech_timing_per_clip,
+    })
 
     return final_response

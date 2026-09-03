@@ -3,7 +3,8 @@ from evaluator import evaluate_attempt
 from evaluators.speaking import evaluate_speaking_part
 from storage.speaking_store import SPEAKING_ATTEMPTS
 from utils.audio_transcriber import transcribe_audio
-from utils.audio_features import extract_audio_features
+from utils.audio_features import compute_speech_rate_wpm, extract_audio_features
+from utils.eval_log import log_evaluation
 from uuid import uuid4
 
 router = APIRouter(
@@ -50,11 +51,12 @@ async def evaluate_speaking_text(request: Request):
             upload.file.seek(0)  # reset pointer consumed by transcriber
             audio_metrics = extract_audio_features(upload)
 
-            # Speech rate (WPM)
-            words = len(transcript.split())
-            duration = audio_metrics.get("duration_sec", 1)
-            speech_rate = round((words / duration) * 60) if duration > 0 else 0
-            audio_metrics["speech_rate_wpm"] = speech_rate
+            # Speech rate (WPM) - see compute_speech_rate_wpm's docstring;
+            # "active" is gated by SPEAKING_LEGACY_VOICED_WPM (default off).
+            wpm = compute_speech_rate_wpm(transcript, audio_metrics)
+            audio_metrics["speech_rate_wpm_raw"] = wpm["raw"]
+            audio_metrics["speech_rate_wpm_voiced"] = wpm["voiced"]
+            audio_metrics["speech_rate_wpm"] = wpm["active"]
 
             result = evaluate_speaking_part(
                 part=part,
@@ -67,6 +69,21 @@ async def evaluate_speaking_text(request: Request):
             raise HTTPException(status_code=500, detail=f"Audio evaluation failed for part {part}: {e}")
 
         SPEAKING_ATTEMPTS[attempt_id]["parts"][part] = result
+
+        # Same underlying scoring engine as /speaking/part/{part}/audio
+        # (both call evaluate_speaking_part directly) - distinguished from
+        # it by evaluator name only so the two routes remain separately
+        # countable in the log, even though they'd score identically.
+        log_evaluation({
+            "evaluator": "speaking_legacy_evaluate_multipart",
+            "task_or_part": f"part_{part}",
+            "question": None,
+            "input_text": transcript,
+            "response": result,
+            "model_default": "gpt-4o-mini",
+            "flags": {},
+            "audio_metrics": audio_metrics,
+        })
 
         return {
             "attempt_id": attempt_id,
@@ -169,6 +186,21 @@ async def evaluate_speaking_text(request: Request):
     
     parts_summary = [(k, 'has_content' if eval_data[k] and eval_data[k].get('transcript') else 'empty') for k in ['part_1', 'part_2', 'part_3']]
     print(f"[DEBUG] Final eval_data parts: {parts_summary}")
-    
+
     # Call evaluate_attempt with all parts data
-    return evaluate_attempt(eval_data)
+    result = evaluate_attempt(eval_data)
+
+    # Routes through evaluator.py's evaluate_attempt() -> evaluate_speaking()
+    # -> evaluate_speaking_part() per part - the SAME scoring engine as the
+    # two log entries above, reached a third way (JSON payload, no audio).
+    log_evaluation({
+        "evaluator": "speaking_legacy_evaluate_json",
+        "task_or_part": "full_test",
+        "question": None,
+        "input_text": {k: (eval_data.get(k) or {}).get("transcript") for k in ("part_1", "part_2", "part_3")},
+        "response": result,
+        "model_default": "gpt-4o-mini",
+        "flags": {},
+    })
+
+    return result
