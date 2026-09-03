@@ -5,7 +5,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from evaluators.speaking import _composite_to_pronunciation_band, compute_pronunciation_score
 from evaluators.speaking_audio import (
     _aggregate_acoustic_pronunciation,
     _aggregate_speech_timing,
@@ -16,6 +15,7 @@ from evaluators.speaking_audio import (
     _BoundedCache,
     _collapse_immediate_repeats,
     _collect_completeness_notices,
+    _composite_to_pronunciation_band,
     _content_words,
     _dedupe_part_level_text_against_question_mistakes,
     _estimate_linguistic_floor,
@@ -35,6 +35,7 @@ from evaluators.speaking_audio import (
     _validate_question_mistakes,
     _SPEAKING_NO_GENUINE_ERROR_PHRASES,
     calculate_overall_band,
+    compute_pronunciation_score,
     count_word_repetitions,
     detect_answer_alignment_issues,
     detect_systematic_errors,
