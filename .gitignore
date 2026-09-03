@@ -9,3 +9,17 @@ __pycache__/
 venv/
 
 *.log
+
+# Append-only evaluation log (utils/eval_log.py) - real candidate question/
+# answer/response data, written locally at runtime. Never committed; the
+# default path is configurable via EVAL_LOG_PATH if it ever needs to live
+# elsewhere.
+eval_logs/
+
+# Local-only official IELTS/Cambridge sample PDFs used by the optional
+# band-accuracy check in tests/writing_eval_harness/. Never committed -
+# these are copyrighted third-party materials. The harness extracts text
+# from them at runtime; only filename/page/band metadata (no essay text)
+# lives in the committed manifest. Tests that need this dir SKIP with a
+# clear message when it's absent.
+tests/writing_eval_harness/official_samples_local/
