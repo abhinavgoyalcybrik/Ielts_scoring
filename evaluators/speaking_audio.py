@@ -4741,10 +4741,9 @@ async def evaluate_question_wise_audio(
                         "question": q_text,
                         "user_answer": answer_text,
                         # An empty list means "no mistakes found" - return
-                        # null instead of [] so it's an explicit signal
-                        # rather than something a consumer might mistake for
-                        # "mistakes weren't computed at all".
-                        "mistakes": mistakes_list if mistakes_list else None,
+                        # the string "na" instead of null/[] so it's an
+                        # explicit, unambiguous signal on the wire.
+                        "mistakes": mistakes_list if mistakes_list else "na",
                         "completeness_notice": qa.get("completeness_notice", "") if isinstance(qa, dict) else "",
                     }
                     # Only present at all when the severity-split flag was
@@ -4765,7 +4764,7 @@ async def evaluate_question_wise_audio(
         if not user_answer:
             user_answer = _extract_answer_from_text(r.get("transcript", ""))
         if q_text or user_answer:
-            item = {"question": q_text, "user_answer": user_answer, "mistakes": None, "completeness_notice": ""}
+            item = {"question": q_text, "user_answer": user_answer, "mistakes": "na", "completeness_notice": ""}
             if not user_answer and r.get("audio_error"):
                 item["audio_error"] = r.get("audio_error")
                 item["audio_error_message"] = r.get("audio_error_message")
