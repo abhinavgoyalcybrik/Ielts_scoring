@@ -185,11 +185,32 @@ def detect_essay_topic(text: str) -> str:
         "social": ["social", "family", "relationship", "community", "society", "people", "culture"],
     }
     
+    # Word-boundary matching, not a plain substring check: "ai" (meant to
+    # catch the acronym "AI") matched inside ordinary words like "campaign",
+    # "maintain", "certain", and "explain" as a bare substring, silently
+    # misrouting topic detection to "technology" for essays that never
+    # mention technology at all (a real observed case: a health-policy
+    # essay containing "campaigns" was misclassified this way, before
+    # "health" - checked later in this dict - ever got a chance to match).
+    # Score by TOTAL keyword occurrences across the whole text, not just
+    # "first topic in dict iteration order with any match at all" - an
+    # essay overwhelmingly about health (multiple mentions of "health")
+    # that happens to mention "education" once in passing was still
+    # classified as "education", since that topic is checked earlier in
+    # the dict and the old code stopped at the first match. Picking the
+    # topic with the most actual signal in the text is far more robust.
+    best_topic = "general"
+    best_score = 0
     for topic, keywords in topic_keywords.items():
-        if any(keyword in text_lower for keyword in keywords):
-            return topic
-    
-    return "general"
+        score = sum(
+            len(re.findall(r"\b" + re.escape(keyword) + r"\b", text_lower))
+            for keyword in keywords
+        )
+        if score > best_score:
+            best_score = score
+            best_topic = topic
+
+    return best_topic
 
 
 def generate_topic_vocabulary(question: str, essay: str, task_type: str) -> List[Dict[str, str]]:
@@ -248,30 +269,93 @@ def generate_topic_vocabulary(question: str, essay: str, task_type: str) -> List
     # Academic Task 1 (charts/data/process with strict 50/50 balance)
     if task_type in ("task_1", "task1"):
         base_words = [
-            "illustrates",
-            "proportion",
-            "trend",
-            "increase",
-            "decline"
-        ][:5]
+            {"word": "illustrates", "usage_hint": "introduce what the chart/graph/diagram shows"},
+            {"word": "proportion", "usage_hint": "a share or fraction of a total"},
+            {"word": "trend", "usage_hint": "the general direction of change over time"},
+            {"word": "significant", "usage_hint": "a change large enough to be worth noting"},
+            {"word": "fluctuate", "usage_hint": "rise and fall irregularly over time"},
+        ]
 
-        if "transport" in question_lower or "travel" in question_lower:
-            topic_words_raw = ["commute", "traffic", "vehicle", "passengers", "public transport"]
-        elif "population" in question_lower:
-            topic_words_raw = ["residents", "demographics", "growth rate", "urban", "rural"]
-        elif "education" in question_lower or "students" in question_lower:
-            topic_words_raw = ["students", "enrollment", "graduates", "institutions", "literacy"]
-        elif "sales" in question_lower or "company" in question_lower:
-            topic_words_raw = ["revenue", "profit", "consumers", "market share", "growth"]
-        else:
-            topic_words_raw = ["category", "data", "figures", "comparison", "segment"]
+        # Reuse the SAME topic detected above (via detect_essay_topic(),
+        # already computed into `topic`) instead of a separate, much
+        # narrower 4-keyword re-match - the old version only recognised
+        # transport/population/education/sales and silently fell back to a
+        # generic list (with an identical "context-based usage" hint on
+        # every word) for anything else, e.g. a chart about spending or
+        # health data, even though detect_essay_topic() already classifies
+        # those correctly and Task 2's vocabulary already relies on it.
+        task1_topic_vocab = {
+            "technology": [
+                {"word": "adoption rate", "usage_hint": "how quickly a technology is taken up"},
+                {"word": "digital divide", "usage_hint": "gap in access to technology"},
+                {"word": "penetration", "usage_hint": "how widespread use of something is"},
+                {"word": "device ownership", "usage_hint": "proportion who own a device"},
+                {"word": "usage rate", "usage_hint": "how often something is used"},
+            ],
+            "education": [
+                {"word": "enrolment", "usage_hint": "number of people registered/signed up"},
+                {"word": "graduates", "usage_hint": "people who completed a qualification"},
+                {"word": "literacy rate", "usage_hint": "proportion able to read and write"},
+                {"word": "institutions", "usage_hint": "schools, colleges, or universities"},
+                {"word": "attainment", "usage_hint": "level of qualification reached"},
+            ],
+            "work": [
+                {"word": "workforce", "usage_hint": "the total number of people working"},
+                {"word": "employment rate", "usage_hint": "proportion of people in work"},
+                {"word": "sector", "usage_hint": "a distinct area of industry/employment"},
+                {"word": "occupation", "usage_hint": "a person's job or profession"},
+                {"word": "productivity", "usage_hint": "output achieved per unit of effort"},
+            ],
+            "environment": [
+                {"word": "emissions", "usage_hint": "gases released, e.g. by industry or vehicles"},
+                {"word": "renewable", "usage_hint": "naturally replenished energy source"},
+                {"word": "consumption", "usage_hint": "the amount used"},
+                {"word": "carbon footprint", "usage_hint": "total emissions caused by something"},
+                {"word": "sustainability", "usage_hint": "meeting needs without depleting resources"},
+            ],
+            "health": [
+                {"word": "prevalence", "usage_hint": "how common a condition is in a group"},
+                {"word": "life expectancy", "usage_hint": "average number of years lived"},
+                {"word": "expenditure", "usage_hint": "amount of money spent"},
+                {"word": "obesity rate", "usage_hint": "proportion classified as obese"},
+                {"word": "dietary", "usage_hint": "relating to food and diet"},
+            ],
+            "travel": [
+                {"word": "tourist arrivals", "usage_hint": "number of visitors entering a place"},
+                {"word": "visitors", "usage_hint": "people who travel to a place"},
+                {"word": "destination", "usage_hint": "the place being travelled to"},
+                {"word": "duration of stay", "usage_hint": "length of time spent somewhere"},
+                {"word": "tourism revenue", "usage_hint": "money earned from tourism"},
+            ],
+            "transport": [
+                {"word": "commute", "usage_hint": "regular travel to and from work"},
+                {"word": "congestion", "usage_hint": "traffic crowding"},
+                {"word": "vehicle ownership", "usage_hint": "proportion who own a vehicle"},
+                {"word": "passengers", "usage_hint": "people travelling on public transport"},
+                {"word": "public transport", "usage_hint": "buses, trains, and similar shared travel"},
+            ],
+            "social": [
+                {"word": "demographic", "usage_hint": "a section of the population by age/group"},
+                {"word": "household", "usage_hint": "people living together as a unit"},
+                {"word": "residents", "usage_hint": "people living in a particular place"},
+                {"word": "urban", "usage_hint": "relating to cities/towns, as opposed to rural"},
+                {"word": "growth rate", "usage_hint": "how quickly a figure increases over time"},
+            ],
+            "general": [
+                {"word": "category", "usage_hint": "a labelled group within the data"},
+                {"word": "comparison", "usage_hint": "highlighting a difference between two figures"},
+                {"word": "segment", "usage_hint": "one distinct portion of the data"},
+                {"word": "expenditure", "usage_hint": "amount of money spent"},
+                {"word": "surpass", "usage_hint": "exceed another figure or category"},
+            ],
+        }
 
-        topic_words_raw = topic_words_raw[:5]
-        final_words = base_words + topic_words_raw  # exactly 10 (5 base + 5 topic)
+        topic_words = task1_topic_vocab.get(topic, task1_topic_vocab["general"])
+        final_words = base_words + topic_words  # exactly 10 (5 base + 5 topic)
 
         vocab_structured = [
-            {"word": w, "usage_hint": "context-based usage", "task_type": "task_1", "task_specific": True}
-            for w in final_words
+            {"word": item["word"], "usage_hint": item["usage_hint"], "task_type": "task_1", "task_specific": True}
+            for item in final_words
         ]
         return build(vocab_structured, "task_1", limit=10)
 

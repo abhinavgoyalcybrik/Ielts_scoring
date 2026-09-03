@@ -142,6 +142,24 @@ def transcribe_audio(audio_source, question: Optional[str] = None, language: str
             )
         segments = list(segments_iter)
 
+        # A real, known failure mode: Silero VAD (vad_filter=True above)
+        # runs BEFORE transcription and can decide a very short clip (a
+        # brief "Yes.", "My parents.", "10 years." type answer) contains no
+        # speech at all, returning zero segments even though the candidate
+        # genuinely spoke - VAD confidence on short utterances is much less
+        # reliable than on longer ones. If the VAD-filtered pass came back
+        # completely empty, retry once WITHOUT VAD rather than silently
+        # accepting "no speech" - a short real answer must still produce a
+        # transcript, not just a longer one.
+        if not segments:
+            no_vad_kwargs = dict(transcribe_kwargs)
+            no_vad_kwargs["vad_filter"] = False
+            try:
+                retry_iter, _info = model.transcribe(wav_path, **no_vad_kwargs)
+                segments = list(retry_iter)
+            except TypeError:
+                pass
+
     text = _clean_transcript("".join(seg.text for seg in segments))
 
     if not return_confidence:
