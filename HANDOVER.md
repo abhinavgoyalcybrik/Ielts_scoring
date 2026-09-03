@@ -12,7 +12,6 @@ before deploying.
 | `WRITING_INDEPENDENT_MODEL_ANSWER` | OFF | v2 refine pipeline — builds the "model answer" independently instead of rewriting a possibly-weak submission. Safe to leave off. |
 | `SPEAKING_MISTAKE_SEVERITY_SPLIT` | OFF | Splits Speaking mistakes into significant/minor + adds deterministic word-repetition detection. Repetition thresholds are provisional (not calibrated on real data). Safe to leave off. |
 | `SPEAKING_VOICED_WPM` | OFF | Switches Speaking's "active" WPM figure from raw-duration to voiced-duration basis. Safe to leave off. |
-| `SPEAKING_LEGACY_VOICED_WPM` | OFF | Prep flag for Engine B, not wired to anything live yet. Safe to leave off. |
 | `EVAL_LOG_ENABLED` | ON (infra, not a scoring behavior change) | Fire-and-forget append-only JSONL logging of every evaluation to `eval_logs/`. Cannot block or alter a response — write happens off the request path. |
 | `EVAL_LOG_PATH` | `eval_logs` | Where those files go. **Must be a writable directory on the server** — this is the only way to get real usage/traffic data; see next section. |
 
@@ -31,13 +30,21 @@ unanswerable. Confirm write access, let it run a few days, then:
 python scripts/eval_log_report.py --path eval_logs --days 7
 ```
 
-## Known unresolved: two live Speaking scoring engines
+## Update: Speaking is down to one engine
 
-There are two structurally different Speaking scoring paths live at once (see
-`SPEAKING_ENGINE_CONSOLIDATION.md` for the full map and options). No consolidation
-decision has been made — it depends on which engine(s) real traffic actually hits,
-which needs the eval log above. Do not merge/retire either engine until that data
-exists.
+The "two live Speaking scoring engines" issue below is resolved, not open. Confirmed
+via the frontend that only `/speaking/audio/question-wise` had a consumer — the other
+two routes (`/speaking/part/{part}/audio`, `/speaking/evaluate`) are gone, along with
+the legacy engine behind them (`evaluators/speaking.py` and everything that only
+existed to serve it — full list in `SPEAKING_ENGINE_CONSOLIDATION.md`'s "Resolution"
+section). That legacy engine had a hard 4.0 floor on every criterion (a true beginner
+scored 4.2–4.7 instead of Band 1) and its own separate WPM bug — both gone with it.
+`SPEAKING_LEGACY_VOICED_WPM` is removed from the flag table above for the same reason.
+
+One Speaking endpoint remains: `/speaking/audio/question-wise`, unchanged and verified
+byte-identical throughout this cleanup. `evaluators/speaking_final.py` (an already-
+unreachable, never-registered route) was deliberately left alone rather than also
+removed — noted as a known orphan for a future cleanup, not a risk.
 
 ## Also flagged, not fixed (Writing Task 1 prompts)
 

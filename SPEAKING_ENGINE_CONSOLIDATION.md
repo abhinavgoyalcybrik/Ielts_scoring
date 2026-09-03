@@ -1,24 +1,60 @@
-# Speaking engine consolidation - tracking notes
+# Speaking engine consolidation - RESOLVED
 
-Living reference for the "two scoring engines, three live routes" finding.
-Nothing here has been actioned - traffic data decides what happens next.
-See `scripts/eval_log_report.py` for the traffic report and
-`speaking_engine_comparison.json` for the raw divergence run.
+**The engine question is closed.** The frontend was confirmed to use only
+`/speaking/audio/question-wise` - the other two routes had no consumer.
+Engine B (`evaluators/speaking.py`) and both its routes
+(`/speaking/part/{part}/audio`, `/speaking/evaluate`) have been removed.
+Engine A (`evaluators/speaking_audio.py`) is now the only Speaking scorer.
+Everything below the "Resolution" section is kept as historical record -
+it's the evidence the decision was based on, not an open question.
 
-## Current state (as of this note)
+## Resolution
+
+- Step 1 (dependency map): confirmed Engine A's only dependency on Engine B
+  was `compute_pronunciation_score` (+ two private helpers +
+  `_PRONUNCIATION_BAND_ANCHORS`) - relocated verbatim into
+  `speaking_audio.py`, verified byte-identical via `TestClient` before/after.
+  Also surfaced that `evaluators/api/speaking_text.py`'s `/speaking/evaluate`
+  JSON branch reached Engine B a third way, through
+  `evaluator.py::evaluate_attempt()` - not just the two routes' direct calls.
+- Step 2 (disable): both routes unmounted in `main_api.py` (404), full suite
+  green, Engine A verified byte-identical end-to-end. Shipped and committed
+  before any deletion.
+- Step 3 (delete): `evaluators/speaking.py`, `evaluators/api/speaking.py`,
+  `evaluators/api/speaking_text.py`, `utils/audio_features.py`,
+  `evaluator.py`'s speaking branch, `utils/wpm.py::calculate_speaking_wpm`
+  (its sibling `calculate_writing_wpm` stayed - it's live, used by
+  `evaluator.py`'s Writing branch), `SPEAKING_LEGACY_VOICED_WPM` and its
+  test file, and the two root-level scripts that only exercised Engine B
+  (`test_speaking_direct.py`, `test_speaking_quality.py` - the latter was
+  already broken, hardcoded to a local port).
+
+**Left alone, deliberately**: `evaluators/speaking_final.py`
+(`GET /speaking/final/{attempt_id}`) and `storage/speaking_store.py`. Neither
+was ever registered in `main_api.py` - already unreachable, not a
+consequence of this cleanup. Noted here as a known orphan for a future
+cleanup pass, not touched now - tidiness wasn't worth the blast radius
+during a deletion pass that was already touching this much.
+
+Current state:
 
 | Route | Engine | Status |
 |---|---|---|
-| `/speaking/audio/question-wise` | A (`speaking_audio.py::generate_scores`) | Actively maintained - all fixes this session went here |
-| `/speaking/part/{part}/audio` | B (`speaking.py::evaluate_speaking_part`) | Logging wired, not touched |
-| `/speaking/evaluate` (multipart) | B, same function | Logging wired, not touched |
-| `/speaking/evaluate` (JSON) | B, via `evaluator.py::evaluate_attempt` → `evaluate_speaking` (loops `evaluate_speaking_part`) | Logging wired, not touched |
+| `/speaking/audio/question-wise` | A (`speaking_audio.py::generate_scores`) | The only Speaking route |
 
-Flags, all default OFF, nothing shipped:
-- `SPEAKING_MISTAKE_SEVERITY_SPLIT` (Engine A minor/significant split + repetition)
-- `SPEAKING_VOICED_WPM` (Engine A WPM denominator fix)
-- `SPEAKING_LEGACY_VOICED_WPM` (Engine B WPM denominator fix, prepared)
+Flags:
+- `SPEAKING_MISTAKE_SEVERITY_SPLIT` (Engine A minor/significant split + repetition) - default OFF, unaffected by this cleanup
+- `SPEAKING_VOICED_WPM` (Engine A WPM denominator fix) - default OFF, unaffected by this cleanup
+- ~~`SPEAKING_LEGACY_VOICED_WPM`~~ (Engine B WPM denominator fix, prepared) - removed, the code it existed to fix is gone
 - `EVAL_LOG_ENABLED` (default ON - passive logging only, no scoring effect)
+
+---
+
+## Historical record - the investigation that led to the decision above
+
+Living reference for the "two scoring engines, three live routes" finding,
+kept for why the decision was made. Nothing below reflects current repo
+state - see "Resolution" above for that.
 
 ## Divergence, quantified (see `speaking_engine_comparison.json` for full raw output)
 
@@ -97,7 +133,7 @@ removing it alone is a complete fix for that path. For audio-bearing requests, r
 specifically (not lexical/grammar/pronunciation) via the pause-based fusion weight -
 worth knowing, not necessarily worth fixing in the same pass.
 
-## Decision, on record (pending the traffic numbers)
+## Decision, on record - TRIGGERED
 
 - **Zero traffic on Engine B routes** -> option (b), consolidate properly. No rush, no
   compat layer needed since there are no real callers to break.
@@ -105,9 +141,14 @@ worth knowing, not necessarily worth fixing in the same pass.
   immediately), then (b) follows as the real fix. Not (c) - an error helps nobody when a
   one-line change fixes the actual harm.
 
-Not yet triggered - waiting on `scripts/eval_log_report.py` numbers.
+**What actually happened**: confirmed via the frontend (not `eval_log_report.py` -
+this environment never accumulated real traffic to measure) that Engine B had zero
+consumers. Option (b) taken directly: Engine B removed entirely rather than routed
+through a shim, since there was nothing left calling it to preserve compatibility for.
+The three options below were the shim/patch/error-response menu for the "still has
+traffic" branch - moot once zero-traffic was confirmed, kept for the record.
 
-## If any live traffic reaches Engine B routes - three options, not chosen
+## The three options that were on the table if Engine B had live traffic (not taken)
 
 ### (a) Remove the 4.0 floor only
 - **Change**: one line in `calibrate_score` (`evaluators/speaking.py:1628`).
@@ -147,25 +188,35 @@ Not yet triggered - waiting on `scripts/eval_log_report.py` numbers.
   "A wrong band is worse than no band" is the tradeoff this makes explicit, per the
   instruction that named it.
 
-No option chosen. Traffic data (item 1) decides which, if any, ships - and whether it's
-urgent at all.
+Not taken - superseded by the direct-removal resolution above.
 
-## Retirement list (report only, nothing removed)
+## Retirement list - DONE (was: report only, nothing removed)
 
 - `evaluators/speaking.py::evaluate_speaking_part` / `evaluate_speaking` - Engine B's
-  scoring logic. Candidate for full removal once traffic confirms zero live usage.
+  scoring logic. **Removed** - traffic confirmed zero live usage via the frontend.
 - `evaluator.py`'s `test_type == "speaking"` branch - thin wrapper calling
-  `evaluate_speaking`, retires with it.
-- `utils/audio_features.py` - retires with Engine B (its `compute_speech_rate_wpm` /
-  `SPEAKING_LEGACY_VOICED_WPM` prep becomes moot if Engine B goes away entirely -
-  removal costs nothing to reverse since it was never turned on).
+  `evaluate_speaking`. **Removed**, along with the module-level imports it needed
+  (`evaluators.speaking.evaluate_speaking`) - Writing branch and `main.py` verified
+  still working afterward.
+- `utils/audio_features.py` - retired with Engine B (its `compute_speech_rate_wpm` /
+  `SPEAKING_LEGACY_VOICED_WPM` prep became moot once Engine B was gone). **Removed**,
+  along with `SPEAKING_LEGACY_VOICED_WPM` and its test file.
 - `evaluate_speaking_part`'s `time_seconds`-based internal WPM recomputation
-  (`speaking.py:1204-1207`) - bypasses `audio_metrics` entirely, computed from a bare
-  caller-supplied scalar with no waveform available to derive voiced time from. Correctly
-  NOT given the same fix as the other two WPM paths (structurally can't be). **If Engine
-  B is retired, this path retires with it and needs no fix at all** - noting it here
-  specifically so it isn't mistaken for an outstanding gap in the WPM fix.
+  (`speaking.py:1204-1207`) - bypassed `audio_metrics` entirely, computed from a bare
+  caller-supplied scalar with no waveform available to derive voiced time from. **Gone**
+  with the rest of `evaluate_speaking_part` - needed no separate fix, as predicted.
 - `utils/wpm.py::calculate_speaking_wpm` - a third, independent WPM formula (same
   raw-duration bug), imported into `evaluator.py` but never actually called anywhere.
-  Dead code, not a live risk. The fragmentation pattern (three independent WPM
-  definitions for one concept) in miniature.
+  **Removed** - but its sibling `calculate_writing_wpm` in the same file is genuinely
+  live (`evaluator.py`'s Writing branch, exercised by `main.py`) and was kept. The
+  original plan to delete the whole file would have broken Writing; caught before
+  anything was deleted, not after.
+
+## Left as a known orphan, not part of this cleanup
+
+- `evaluators/speaking_final.py` (`GET /speaking/final/{attempt_id}`) - never
+  registered in `main_api.py`, unreachable before this cleanup and unreachable after
+  it. Depends on `storage/speaking_store.py::SPEAKING_ATTEMPTS` (which Engine B's two
+  routes also used) and `utils/band.py::calculate_final_speaking_band` (used nowhere
+  else). Deliberately left alone - it's already dead and removing it added risk this
+  pass didn't need to take on. Candidate for a future, separate, low-stakes cleanup.

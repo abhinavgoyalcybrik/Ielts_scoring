@@ -6,11 +6,11 @@ proven deterministic Writing fixes + build measurement" plan.
 Run: venv/Scripts/python.exe tests/speaking_eval_harness/run_eval_harness.py
 
 Runs live against the real generate_scores()/generate_question_mistakes()
-(evaluators/speaking_audio.py) and evaluate_speaking_part()
-(evaluators/speaking.py, legacy pipeline) - real GPT calls, real cost, not
-a mocked unit test. Targets each function's plain-text entry point
-directly (no audio/Whisper involved), the same pattern
-tests/test_speaking_token_usage.py already uses.
+(evaluators/speaking_audio.py, the only Speaking scoring engine now that
+the legacy pipeline has been retired - see SPEAKING_ENGINE_CONSOLIDATION.md)
+- real GPT calls, real cost, not a mocked unit test. Targets each
+function's plain-text entry point directly (no audio/Whisper involved),
+the same pattern tests/test_speaking_token_usage.py already uses.
 
 Determinism (Check 1) is the first check because nothing else is
 trustworthy to measure until it's stable - matches the "TEMPERATURE 0...
@@ -29,7 +29,6 @@ from asr_artifact_corpus import ASR_ARTIFACT_ITEMS
 from error_injection import build_damaged_corpus
 
 from evaluators.speaking_audio import generate_scores, generate_question_mistakes
-from evaluators.speaking import evaluate_speaking_part
 
 
 class HarnessAbortError(Exception):
@@ -76,23 +75,6 @@ def check_1_determinism(n_runs: int = 5) -> dict:
         mistakes_result = _safe_generate_question_mistakes(fixed_item["question"], fixed_item["answer"], _context="determinism/generate_question_mistakes")
         mistake_runs.append(mistakes_result.get("mistakes", []))
 
-    # Legacy pipeline - best-effort, does not abort the whole check if it
-    # errors (audio_metrics shape is a plain dict of optional keys; {}
-    # exercises the "no acoustic data supplied" path).
-    legacy_runs = []
-    legacy_error = None
-    try:
-        for _ in range(n_runs):
-            legacy_result = evaluate_speaking_part(1, fixed_item["answer"], {})
-            legacy_runs.append({
-                "fluency": legacy_result.get("fluency"),
-                "lexical": legacy_result.get("lexical"),
-                "grammar": legacy_result.get("grammar"),
-                "pronunciation": legacy_result.get("pronunciation"),
-            })
-    except Exception as e:
-        legacy_error = str(e)
-
     def _spread(dicts, key):
         values = [d.get(key) for d in dicts if d.get(key) is not None]
         return (min(values), max(values)) if values else (None, None)
@@ -102,17 +84,12 @@ def check_1_determinism(n_runs: int = 5) -> dict:
     mistake_category_sets = [frozenset((m.get("type"), m.get("original")) for m in run) for run in mistake_runs]
     mistake_sets_identical = len(set(mistake_category_sets)) == 1
 
-    legacy_spread = {k: _spread(legacy_runs, k) for k in ("fluency", "lexical", "grammar", "pronunciation")} if legacy_runs else None
-
     return {
         "n_runs": n_runs,
         "score_runs": score_runs,
         "score_spread": score_spread,
         "mistake_counts": mistake_counts,
         "mistake_sets_identical": mistake_sets_identical,
-        "legacy_score_runs": legacy_runs,
-        "legacy_score_spread": legacy_spread,
-        "legacy_error": legacy_error,
     }
 
 
@@ -203,10 +180,6 @@ def print_report():
     print(f"  speaking_audio.py generate_scores spread: {c1['score_spread']}")
     print(f"  speaking_audio.py mistake counts across runs: {c1['mistake_counts']}")
     print(f"  speaking_audio.py mistake sets identical across all runs: {c1['mistake_sets_identical']}")
-    if c1["legacy_error"]:
-        print(f"  legacy evaluate_speaking_part: SKIPPED (error: {c1['legacy_error']})")
-    else:
-        print(f"  legacy evaluate_speaking_part score spread: {c1['legacy_score_spread']}")
 
     print("-" * 78)
     print("CHECK 2 - False positives on clean corpus (expect 0 mistakes)")

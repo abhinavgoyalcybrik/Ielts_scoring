@@ -1,9 +1,8 @@
 from evaluators.writing import evaluate_writing
-from evaluators.speaking import evaluate_speaking
 
 # SAFE analysis-only imports
 from utils.cefr_mapper import map_ielts_to_cefr
-from utils.wpm import calculate_writing_wpm, calculate_speaking_wpm
+from utils.wpm import calculate_writing_wpm
 from utils.vocabulary_feedback import analyze_vocabulary, get_writing_vocabulary_reference
 import re
 import json
@@ -480,21 +479,13 @@ def evaluate_attempt(data):
         return result
 
     # =========================
-    # SPEAKING (TEXT ONLY) - PART-WISE ASSESSMENT
+    # Speaking removed - it routed through evaluators/speaking.py (the
+    # legacy scoring engine, retired). Speaking evaluation now lives
+    # entirely behind /speaking/audio/question-wise
+    # (evaluators/speaking_audio.py), which this dispatcher was never
+    # part of. See SPEAKING_ENGINE_CONSOLIDATION.md.
     # =========================
-    if test_type == "speaking":
-        # Check if multi-part format (part_1, part_2, part_3)
-        if any(k in data for k in ["part_1", "part_2", "part_3"]):
-            # Multi-part format - call evaluate_speaking with full data
-            result = evaluate_speaking(data)
-        else:
-            # Legacy single-part format - has "part", "transcript", "audio_metrics"
-            result = evaluate_speaking(data)
-
-        return result
-
-    # =========================
-    raise ValueError("Only writing and speaking evaluation are enabled right now")
+    raise ValueError("Only writing evaluation is enabled right now")
 
 
 # =========================
