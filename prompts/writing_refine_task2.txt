@@ -61,7 +61,7 @@ return an empty list here instead.
 Respond ONLY in valid JSON, in exactly this shape:
 
 {
-  "refined_answer": "<the full model essay, paragraphs separated by \\n\\n>",
+  "refined_answer": "<the full model essay, paragraphs separated by \n\n>",
   "vocabulary_suggestions": [
     {"original_phrase": "<exact phrase from the candidate's essay>", "stronger_alternative": "<the Band 9 alternative>", "placement_context": "<brief note on where/how it fits>"}
   ]

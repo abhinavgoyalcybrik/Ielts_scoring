@@ -154,3 +154,54 @@ rate (25/313), entirely in the significant+low direction** - zero minor+high cas
 The live n=5 sample showed 11-14% (Task 1) and 0% (Task 2) - consistent with the historical
 rate given the much smaller sample. Worth building as a reported diagnostic once there's a
 real decision about where those reports should surface; not implemented.
+
+## Update: three more live-QA bugs in the mistake/refine pipeline
+
+No new flag - these are unconditional deterministic filters, same pattern as the other
+Writing mistake-pipeline items (Items 1-10, all unconditional; only the refine-v2 pipeline
+and severity guidance are flag-gated). All three ship live, default behaviour, no schema
+change beyond additive diagnostics.
+
+**Item 8 - over-correction filter.** A mistake whose "corrected" field only ADDS to
+"original" (or is identical to it) isn't fixing anything - e.g. "...benefits and drawbacks"
+-> "...benefits and drawbacks to consider". Calibrated against 241 real Writing mistakes:
+7/241 (2.9%) dropped, all confirmed genuine non-fixes, zero real corrections lost. Caught and
+fixed a real bug in its own first draft during calibration (an early-return that let a
+qualifying insertion mask a later, genuine word substitution sitting right after it).
+
+**Item 8b - category/subtype contradiction detector.** Built as real code
+(`_mistake_category_subtype_contradiction`), **not wired into anything** - measurement only.
+First pass measured 14.5%, but that was mostly a keyword-pattern bug of its own (bare
+"singular"/"plural" is standard, correct language for describing Subject-Verb Agreement,
+not evidence of a Noun Number mislabel). Fixed rate: 1.2% (3/241) - the real named case
+(category says Preposition Errors, subtype says missing article) plus one genuine borderline
+case.
+
+**Item 9 - paragraphing mislabel filter.** A "Paragraphing Errors" mistake gets dropped
+outright when the essay (post-newline-fix) genuinely has real paragraph breaks - the
+category's own premise is false, regardless of what the explanation argues. 10/17 (59%) of
+all such mistakes across saved runs would be dropped, all confirmed genuine mislabels - 8 of
+those 10 are actually about a single long SENTENCE, not paragraph structure at all. Separate
+finding, not fixed: 47% of every "Paragraphing Errors" mistake ever seen has a single-
+sentence original - systematic, worth a dedicated reroute-to-Sentence-Structure fix later.
+
+**Item 10 - literal "\n" in refined_answer.** The mirror of the original /n/n input bug, on
+the output side: the candidate's model answer sometimes contained the literal two characters
+backslash+n instead of a real line break. Root cause found and fixed: all three refine
+prompt files' RESPONSE FORMAT example showed a double-escaped "\\n\\n" while their own
+STRUCTURE section, a few lines earlier in the SAME file, correctly used a single backslash
+for the identical instruction - an internal inconsistency that could teach GPT to double-
+escape its own JSON output. Fixed in all three files. Could not reproduce the original
+symptom live even under the unmodified old prompt (0/10 real generations) - the fix is
+correct on its own static merits and is now consistent within each file, but causation is a
+well-supported hypothesis here, not a proven-by-reproduction fact. Backstop shipped
+regardless, per instruction: a literal "\n" is now a hard validation failure that drives a
+retry in both refine paths (v2 and legacy), and the text actually returned is unconditionally
+normalised as a last resort even if the defect somehow survives the retry too - so a
+candidate can no longer see literal escape characters in their model answer either way.
+
+All three measured live at n=5 on the real source essays (foreign-country Task 2,
+hospital-maps Task 1): every named case resolved, bands identical across every run and every
+flag state, Task 1 coverage unaffected (the new filters check correction shape/category-vs-
+essay-structure/escape-sequence content - none of that logic touches or overlaps with the
+existing coverage checks, confirmed both by calibration and by live output).

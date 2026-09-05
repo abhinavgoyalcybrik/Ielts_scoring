@@ -1,4 +1,5 @@
 from pathlib import Path
+import difflib
 import json
 import logging
 import os
@@ -542,6 +543,74 @@ def _fix_article_preposition_mislabel(mistakes: list) -> list:
     return mistakes
 
 
+# category/subtype contradiction check (live QA finding, NOT wired into
+# any pipeline yet - see _mistake_category_subtype_contradiction()'s
+# docstring below). Only categories with an unambiguous, distinctive
+# keyword are covered - vaguer categories (e.g. "Missing Key Feature")
+# have no crisp lexical fingerprint a subtype could contradict, so they're
+# left unjudged rather than guessed at.
+_CATEGORY_TYPE_TAGS = {
+    "article errors": "article",
+    "preposition errors": "preposition",
+    "subject-verb agreement errors": "subject_verb_agreement",
+    "spelling errors": "spelling",
+    "pronoun errors": "pronoun",
+    "verb form errors": "verb_form",
+    "tense errors": "tense",
+    "noun number errors": "noun_number",
+    "punctuation errors": "punctuation",
+    "paragraphing errors": "paragraphing",
+    "paragraph unity errors": "paragraphing",
+    "sentence fragments": "sentence_fragment",
+    "sentence boundary errors": "sentence_fragment",
+}
+_TYPE_TAG_KEYWORDS = {
+    "article": re.compile(r"\barticles?\b", re.IGNORECASE),
+    "preposition": re.compile(r"\bprepositions?\b", re.IGNORECASE),
+    "subject_verb_agreement": re.compile(r"\bsubject[- ]verb\b|\bsubject.verb agreement\b", re.IGNORECASE),
+    "spelling": re.compile(r"\bspelling\b|\bmisspell", re.IGNORECASE),
+    "pronoun": re.compile(r"\bpronouns?\b", re.IGNORECASE),
+    "verb_form": re.compile(r"\bverb form\b|\bverb tense\b", re.IGNORECASE),
+    "tense": re.compile(r"\btenses?\b", re.IGNORECASE),
+    # Bare "singular"/"plural" is deliberately NOT enough on its own -
+    # that is also the correct, standard vocabulary for describing a
+    # genuine Subject-Verb Agreement error ("singular subject, plural
+    # verb"), and a first calibration pass against real data confirmed it
+    # false-fires there in the large majority of matches. Requires "noun"
+    # explicitly, or an unambiguous pluralization-specific word.
+    "noun_number": re.compile(r"\bnoun (?:number|plural|singular)\b|\bpluralis(?:e|ation)\b|\bpluraliz(?:e|ation)\b", re.IGNORECASE),
+    # Bare "comma" is deliberately excluded - "comma splice" is standard,
+    # correct terminology for a sentence-boundary/run-on error, not
+    # evidence the category should have been "Punctuation Errors".
+    "punctuation": re.compile(r"\bpunctuation\b|\bapostrophe\b", re.IGNORECASE),
+    "paragraphing": re.compile(r"\bparagraph", re.IGNORECASE),
+    "sentence_fragment": re.compile(r"\bfragment\b|\brun-on\b|\bincomplete sentence\b", re.IGNORECASE),
+}
+
+
+def _mistake_category_subtype_contradiction(category: str, subtype: str) -> str | None:
+    """NOT wired into evaluate_writing() or any filtering pipeline -
+    measurement only, per explicit instruction ("build the check, report
+    the rate... do not act on it yet"). Live QA case: category
+    "Preposition Errors", subtype "missing article" - the two name
+    different error types, and since nothing was actually missing in the
+    flagged span, neither one was describing what was really wrong. This
+    returns the OTHER type tag the subtype text names, when it names one
+    that contradicts "category" - or None when category isn't in the
+    covered set, or subtype doesn't name a contradicting type. Returning
+    a match doesn't mean the mistake is wrong outright - see the intended
+    use in the calling report - only that its category and subtype
+    disagree about what kind of error this is, which is a reliability
+    signal worth counting before deciding what to do with it."""
+    cat_tag = _CATEGORY_TYPE_TAGS.get((category or "").strip().lower())
+    if not cat_tag or not subtype:
+        return None
+    for tag, pattern in _TYPE_TAG_KEYWORDS.items():
+        if tag != cat_tag and pattern.search(subtype):
+            return tag
+    return None
+
+
 def _escalate_frequent_minor_mistakes(mistakes: list) -> list:
     """A single 'minor' issue type is invisible to the band score; the SAME
     minor issue type recurring 4+ times across one answer is not - it's a
@@ -811,6 +880,54 @@ def _mistake_spans_whole_essay(original: str, essay: str) -> bool:
         return False
     original_word_count = count_words(_strip_wrapping_quotes(original))
     return (original_word_count / essay_word_count) >= _WHOLE_ESSAY_MISTAKE_FRACTION
+
+
+def _correction_is_pure_addition(original: str, corrected: str) -> bool:
+    """Item 8 - a real, confirmed over-correction bug: "corrected" is
+    sometimes just "original" with an optional phrase tacked on - "living
+    in a foreign country has its own benefits and drawbacks" -> "...
+    benefits and drawbacks TO CONSIDER". Nothing in the original was
+    wrong; the "correction" proposes a stylistic preference, not a fix. A
+    genuine correction changes or removes something.
+
+    Diffs the two texts word-by-word (difflib.SequenceMatcher, order-
+    sensitive - a set-based word diff can't tell insertion from
+    substitution). If every non-equal opcode is an "insert" (nothing ever
+    replaced or deleted), "corrected" only ever ADDS to "original".
+
+    A genuinely missing article/preposition is ALSO an insertion ("29%
+    sodium" -> "29% of sodium") - dropping every insertion would remove
+    real corrections along with fake ones. Restricting the drop to an
+    insertion of 2+ words, or one positioned at the very end of the span,
+    keeps the single-word/mid-span case (a real missing-word fix) while
+    catching the trailing-phrase case (an optional addition tacked onto
+    an already-complete sentence). Calibrated against every mistake in
+    every saved real run this session has - see the "over-correction
+    calibration" report for the actual numbers behind this exact
+    threshold, including the variants that were NOT chosen and why."""
+    original_words = _strip_wrapping_quotes(original or "").strip().split()
+    corrected_words = _strip_wrapping_quotes(corrected or "").strip().split()
+    if not original_words:
+        return False
+    if original_words == corrected_words:
+        return True
+    matcher = difflib.SequenceMatcher(a=original_words, b=corrected_words, autojunk=False)
+    # Scan every opcode for a replace/delete FIRST, across the whole
+    # sequence, before checking any insert - a real, confirmed bug in an
+    # earlier version of this function returned True on the first
+    # qualifying insert without looking ahead, so a correction that both
+    # inserted a word AND replaced a later one (a genuine substitution,
+    # not a pure addition) was wrongly caught. Live example this caught:
+    # "the benefits outweigh...because technology saves" -> "the benefits
+    # OF TECHNOLOGY outweigh...because IT saves" - a real word swap
+    # ("technology" -> "it") sitting right after a 2-word insertion.
+    opcodes = matcher.get_opcodes()
+    if any(tag in ("replace", "delete") for tag, *_rest in opcodes):
+        return False
+    for tag, _i1, _i2, j1, j2 in opcodes:
+        if tag == "insert" and ((j2 - j1) >= 2 or j2 == len(corrected_words)):
+            return True
+    return False
 
 
 def get_vocabulary_to_learn(essay: str, task_type: str, band: float, question: str = "") -> list:
@@ -1380,6 +1497,20 @@ def _validate_refine_output(
     if word_count >= 80 and len(blocks) <= 1:
         issues.append("no paragraph breaks (\\n\\n) survived in the rewrite despite the explicit instruction")
 
+    # Item 10: the literal two-character sequence "\n" (backslash + n)
+    # sitting in refined_answer instead of a real line break - a hard
+    # failure that drives a retry, not something silently normalised
+    # away and reported as passing. See _fix_literal_backslash_n_in_output's
+    # module comment for the confirmed root cause (now fixed in the
+    # prompt files) - this check is the backstop for whatever still gets
+    # through despite that fix.
+    if _contains_literal_backslash_n(refined):
+        issues.append(
+            "refined_answer contains literal \"\\n\" escape sequences "
+            "instead of real line breaks - write an actual blank line "
+            "between paragraphs, not the characters backslash-n"
+        )
+
     # Structure enforcement - additive to the coverage checks above, which
     # always win if they conflict (see the module-level comment above the
     # regex constants this section uses).
@@ -1605,8 +1736,22 @@ def _generate_refined_answer_v2(
     }
     if task_type == "task_2":
         diagnostics["task2_question_type"] = task2_question_type
+
+    # Item 10 backstop: whatever text is about to be returned - whichever
+    # attempt won - must never actually reach a candidate with literal
+    # "\n" in it, even though the check above already made this a hard
+    # validation failure that drove a retry. Applied last, after
+    # diagnostics are finalised, so diagnostics still reflect the real
+    # attempt-by-attempt validation history rather than a post-hoc-clean
+    # result.
+    final_refined_answer, backslash_n_diag = _fix_literal_backslash_n_in_output(
+        (parsed.get("refined_answer") or essay).strip()
+    )
+    if backslash_n_diag["fired"]:
+        diagnostics["literal_backslash_n_normalized"] = backslash_n_diag
+
     return {
-        "refined_answer": (parsed.get("refined_answer") or essay).strip(),
+        "refined_answer": final_refined_answer,
         "vocabulary_suggestions": parsed.get("vocabulary_suggestions") or [],
         "diagnostics": diagnostics,
     }
@@ -1665,6 +1810,48 @@ def _fix_literal_newline_escaping(essay: str) -> tuple:
     if literal_count > 0 and "\n" not in essay:
         return essay.replace("/n", "\n"), {"fired": True, "literals_converted": literal_count}
     return essay, {"fired": False, "literals_converted": 0}
+
+
+# Item 10 - the mirror bug to _fix_literal_newline_escaping above, on the
+# OUTPUT side rather than the input side: refined_answer sometimes
+# contains the literal two-character sequence "\n" (backslash + n)
+# instead of a real newline - the candidate sees the literal characters
+# printed in their model answer. Root cause found and fixed: the three
+# refine prompt files' own RESPONSE FORMAT section showed a DOUBLE-
+# escaped example ("paragraphs separated by \\n\\n" - two backslashes
+# each) while their STRUCTURE section, a few lines earlier in the same
+# files, correctly used a single backslash for the same instruction -
+# an internal inconsistency. A plain-text prompt (not itself a JSON
+# string) only needs ONE backslash to show GPT what a real JSON-encoded
+# newline looks like; showing two teaches GPT to double-escape its own
+# output, which a correctly-functioning JSON decoder then correctly
+# un-escapes down to one literal backslash followed by a literal 'n' -
+# exactly the symptom reported. The three prompt files are fixed
+# (single backslash now, matching their own STRUCTURE section) - what
+# follows is the backstop this session's own instruction requires
+# regardless: normalise on the way out, but treat ever needing to as a
+# hard validation failure that drives a retry, not a silently accepted
+# fix - the same principle already applied to the truncation-join
+# regression this is explicitly named alongside.
+_LITERAL_BACKSLASH_N_PATTERN = re.compile(r"\\n")
+
+
+def _contains_literal_backslash_n(text: str) -> bool:
+    return bool(_LITERAL_BACKSLASH_N_PATTERN.search(text or ""))
+
+
+def _fix_literal_backslash_n_in_output(text: str) -> tuple:
+    """Backstop only - see the module comment above this pattern's
+    definition for the real fix. Returns (normalised text, diagnostics
+    dict) - same shape as _fix_literal_newline_escaping's return, for the
+    same reason: visibility into whether this ever actually fires again
+    now that the prompt files are corrected."""
+    if not text:
+        return text, {"fired": False, "literals_converted": 0}
+    count = len(_LITERAL_BACKSLASH_N_PATTERN.findall(text))
+    if count == 0:
+        return text, {"fired": False, "literals_converted": 0}
+    return _LITERAL_BACKSLASH_N_PATTERN.sub("\n", text), {"fired": True, "literals_converted": count}
 
 
 def evaluate_writing(data: dict):
@@ -2047,6 +2234,13 @@ def evaluate_writing(data: dict):
             blocks = [b for b in re.split(r'\n\s*\n', text) if b.strip()]
             if text_word_count >= 100 and len(blocks) <= 1:
                 raise ValueError("Refined answer missing paragraph breaks despite explicit instruction")
+            # Item 10: same hard-assertion-with-retry principle as the v2
+            # pipeline's equivalent check - a literal "\n" (backslash + n)
+            # in the completion is a real defect, not something to accept
+            # and normalise away silently. safe_gpt_call's own retry
+            # (already used by this call site) handles the retry.
+            if _contains_literal_backslash_n(text):
+                raise ValueError("Refined answer contains literal \"\\n\" escape sequences instead of real line breaks")
             return result
 
         refined = safe_gpt_call(
@@ -2055,6 +2249,11 @@ def evaluate_writing(data: dict):
             caller=_call_refine_validated,
         )
         refined = safe_output(refined, essay)
+        if isinstance(refined, str):
+            # Backstop, in case every retry attempt above still had the
+            # defect - the candidate must never see literal "\n" in their
+            # model answer regardless of what the fallback path returns.
+            refined, _legacy_backslash_n_diag = _fix_literal_backslash_n_in_output(refined)
         max_refined_words = 170 if task_type == "task_1" else 260
         if isinstance(refined, str):
             refined = _truncate_to_sentence_boundary(refined, max_refined_words)
@@ -2106,6 +2305,28 @@ def evaluate_writing(data: dict):
                 m.get("original") or m.get("sentence") or "",
                 essay,
             ):
+                continue
+            # Item 8: drop over-corrections - "corrected" that only adds
+            # to "original" (or is identical to it) isn't fixing anything.
+            # See _correction_is_pure_addition()'s docstring for the
+            # calibrated threshold and why a single-word/mid-span
+            # insertion (a real missing article/preposition) is exempt.
+            if _correction_is_pure_addition(
+                m.get("original") or m.get("sentence") or "",
+                m.get("corrected") or m.get("correction") or "",
+            ):
+                continue
+            # Item 9: a "Paragraphing Errors" mistake on an essay that
+            # genuinely has real paragraph breaks (essay, at this point,
+            # is already past _fix_literal_newline_escaping) is a
+            # mislabel, not a real finding - live QA case flagged a
+            # single long SENTENCE this way, with the explanation itself
+            # describing a sentence-length problem, not a paragraph-
+            # structure one. Dropped outright regardless of what the
+            # explanation argues - the category's own premise (this
+            # essay lacks paragraph breaks) is simply false when real
+            # newlines are present.
+            if (m.get("category") or "").strip().lower() == "paragraphing errors" and "\n" in essay:
                 continue
             filtered_mistakes.append(m)
         raw_mistakes = filtered_mistakes
